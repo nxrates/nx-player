@@ -1,0 +1,27 @@
+{
+  "name": "lightseek",
+  "version": "0.1.0",
+  "description": "Lightweight music player",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-fs": "^2.4.5",
+    "butterchurn": "^2.6.7",
+    "butterchurn-presets": "^2.4.7"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tauri-apps/cli": "^2",
+    "svelte": "^5.0.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3"
+  }
+}
