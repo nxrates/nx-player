@@ -1,0 +1,33 @@
+[package]
+name = "lightseek"
+version = "0.1.0"
+description = "Lightweight music player"
+authors = ["Paul de Renty"]
+edition = "2021"
+
+[lib]
+name = "lightseek_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+lofty = "0.22"
+blake3 = "1"
+rayon = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", features = ["json"] }
+walkdir = "2"
+dirs = "6"
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "isomp4", "aac", "flac", "ogg", "wav", "pcm"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = "0.6"
+objc2 = "0.6"
