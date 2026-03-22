@@ -1,5 +1,4 @@
 mod analyzer;
-mod audio;
 mod commands;
 mod covers;
 mod covers_fetch;
@@ -9,7 +8,6 @@ mod models;
 mod scanner;
 mod waveform;
 
-use commands::audio::{AudioEngineState, PlaybackReceiver};
 use covers::CoversDir;
 use db::DbState;
 use std::sync::Mutex;
@@ -145,12 +143,6 @@ pub fn run() {
                 folders = defaults;
             }
 
-            // Initialize audio engine
-            let (audio_engine, playback_rx) = audio::engine::AudioEngine::new()
-                .expect("Failed to initialize audio engine");
-            app.manage(AudioEngineState(Mutex::new(audio_engine)));
-            app.manage(PlaybackReceiver(Mutex::new(playback_rx)));
-
             // Initialize extension host
             let ext_dir = app_data_dir.join("extensions");
             app.manage(extensions::ExtensionHostState(Mutex::new(
@@ -214,16 +206,6 @@ pub fn run() {
             commands::playlists::export_playlist_m3u,
             commands::settings::get_settings,
             commands::settings::update_settings,
-            commands::audio::audio_play,
-            commands::audio::audio_pause,
-            commands::audio::audio_stop,
-            commands::audio::audio_load,
-            commands::audio::audio_seek,
-            commands::audio::audio_set_volume,
-            commands::audio::audio_set_playback_rate,
-            commands::audio::audio_start_crossfade,
-            commands::audio::audio_cancel_crossfade,
-            commands::audio::audio_get_state,
             commands::extensions::list_extensions,
             commands::extensions::install_extension,
             commands::extensions::uninstall_extension,
