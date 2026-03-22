@@ -2,8 +2,9 @@
   import { getTheme, setTheme } from '../stores/ui.svelte';
   import { getFolders, loadFolders, startScan, getScanStatus, getScanProgress } from '../stores/library.svelte';
   import { getPlaybackRate, setPlaybackRate, getCurrentTrack } from '../stores/player.svelte';
-  import { addFolder } from '../lib/ipc';
+  import { addFolder, listExtensions, installExtension, uninstallExtension, startExtension, stopExtension } from '../lib/ipc';
   import { open } from '@tauri-apps/plugin-dialog';
+  import type { Extension } from '../lib/types';
 
   let { onBack }: { onBack?: () => void } = $props();
 
@@ -52,6 +53,35 @@
     if (showPresetList && presetList.length === 0) {
       loadPresetList();
     }
+  }
+
+  let extensions = $state<Extension[]>([]);
+
+  $effect(() => { loadExts(); });
+
+  async function loadExts() {
+    try { extensions = await listExtensions(); } catch {}
+  }
+  async function startExt(id: string) { await startExtension(id); await loadExts(); }
+  async function stopExt(id: string) { await stopExtension(id); await loadExts(); }
+  async function removeExt(id: string) {
+    if (confirm('Remove this extension?')) { await uninstallExtension(id); await loadExts(); }
+  }
+  async function installExt() {
+    const selected = await open({ directory: true, multiple: false });
+    if (selected && typeof selected === 'string') {
+      await installExtension(selected); await loadExts();
+    }
+  }
+  function getExtSetting(extId: string, key: string): string {
+    return localStorage.getItem(`ext-${extId}-${key}`) || '';
+  }
+  function setExtSetting(extId: string, key: string, value: string) {
+    localStorage.setItem(`ext-${extId}-${key}`, value);
+  }
+  function toggleExtSetting(extId: string, key: string) {
+    const current = getExtSetting(extId, key);
+    setExtSetting(extId, key, current === 'true' ? 'false' : 'true');
   }
 
   let automix = $state(localStorage.getItem('ls-automix') === 'true');
@@ -251,6 +281,43 @@
       <button class="toggle" class:on={matchBpm} onclick={toggleMatchBpm}>
         <div class="toggle-thumb"></div>
       </button>
+    </div>
+
+    <!-- Extensions -->
+    <div class="section-header">Extensions</div>
+    {#each extensions as ext}
+      <div class="row">
+        <span class="row-label">{ext.name}</span>
+        <div style="display:flex;gap:4px;align-items:center">
+          <button class="toggle" class:on={ext.running} onclick={() => ext.running ? stopExt(ext.id) : startExt(ext.id)}>
+            <div class="toggle-thumb"></div>
+          </button>
+          <button class="action-btn" onclick={() => removeExt(ext.id)}>Remove</button>
+        </div>
+      </div>
+      {#if ext.running && ext.settings.length > 0}
+        {#each ext.settings as setting}
+          <div class="row">
+            <span class="row-label" style="padding-left:16px">{setting.label}</span>
+            {#if setting.type === 'toggle'}
+              <button class="toggle" class:on={getExtSetting(ext.id, setting.key) === 'true'} onclick={() => toggleExtSetting(ext.id, setting.key)}>
+                <div class="toggle-thumb"></div>
+              </button>
+            {:else}
+              <input type={setting.type === 'password' ? 'password' : 'text'}
+                value={getExtSetting(ext.id, setting.key) || setting.default || ''}
+                onchange={(e) => setExtSetting(ext.id, setting.key, (e.target as HTMLInputElement).value)}
+                class="ext-input" />
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    {/each}
+    {#if extensions.length === 0}
+      <div class="row"><span class="row-label" style="color:var(--text-tertiary)">No extensions installed</span></div>
+    {/if}
+    <div class="row">
+      <button class="action-btn" onclick={installExt}>Install Extension...</button>
     </div>
   </div>
 </div>
@@ -465,6 +532,16 @@
     background: var(--bg-surface);
     border-radius: 2px;
     outline: none;
+  }
+
+  .ext-input {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    width: 120px;
+    color: var(--text-primary);
   }
 
   .slider::-webkit-slider-thumb {
