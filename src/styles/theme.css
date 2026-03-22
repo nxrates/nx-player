@@ -4,14 +4,15 @@
   --bg-elevated: #1C1C1E;
   --bg-surface: #2C2C2E;
   --text-primary: #FFFFFF;
-  --text-secondary: rgba(255, 255, 255, 0.55);
-  --text-tertiary: rgba(255, 255, 255, 0.35);
+  --text-secondary: #8E8E93;
+  --text-tertiary: #5A5A5E;
   --accent: #FA2D48;
-  --accent-dim: rgba(250, 45, 72, 0.3);
-  --progress-bg: rgba(255, 255, 255, 0.2);
+  --accent-dim: #4D1019;
+  --progress-bg: #3A3A3C;
   --progress-fill: #FFFFFF;
-  --border: rgba(255, 255, 255, 0.08);
-  --surface-blur: rgba(28, 28, 30, 0.85);
+  --border: #2A2A2C;
+  --surface-blur: #1A1A1C;
+  --glass-bg: rgba(0, 0, 0, 0.45);
 }
 
 [data-theme="light"] {
@@ -19,12 +20,13 @@
   --bg-elevated: #FFFFFF;
   --bg-surface: #E5E5EA;
   --text-primary: #1C1C1E;
-  --text-secondary: rgba(0, 0, 0, 0.55);
-  --text-tertiary: rgba(0, 0, 0, 0.35);
+  --text-secondary: #6C6C70;
+  --text-tertiary: #AEAEB2;
   --accent: #FA2D48;
-  --accent-dim: rgba(250, 45, 72, 0.2);
-  --progress-bg: rgba(0, 0, 0, 0.15);
+  --accent-dim: #FDDDE2;
+  --progress-bg: #D1D1D6;
   --progress-fill: #1C1C1E;
-  --border: rgba(0, 0, 0, 0.08);
-  --surface-blur: rgba(255, 255, 255, 0.85);
+  --border: #D1D1D6;
+  --surface-blur: #F0F0F2;
+  --glass-bg: rgba(255, 255, 255, 0.75);
 }

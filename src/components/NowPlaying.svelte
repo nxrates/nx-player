@@ -396,10 +396,10 @@
     bottom: 0;
     left: 0;
     right: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--glass-bg);
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid var(--border);
   }
 
   .mini-mode .controls-overlay {
@@ -426,7 +426,7 @@
     z-index: 10;
     display: flex;
     gap: 2px;
-    background: rgba(0, 0, 0, 0.4);
+    background: var(--glass-bg);
     backdrop-filter: blur(8px);
     border-radius: 8px;
     padding: 3px;
@@ -438,11 +438,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--text-secondary);
     transition: all 150ms;
     cursor: pointer;
   }
-  .mode-btn:hover { color: rgba(255, 255, 255, 0.8); }
+  .mode-btn:hover { color: var(--text-primary); }
 
   /* Auto-hide mode bar in fullscreen */
   .fullscreen .mode-bar,
@@ -455,7 +455,7 @@
     pointer-events: none;
   }
   .mode-btn.active {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--bg-surface);
     color: white;
   }
 
@@ -468,18 +468,18 @@
     width: 26px;
     height: 26px;
     border-radius: 50%;
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--glass-bg);
     backdrop-filter: blur(8px);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--text-secondary);
     transition: transform 100ms ease, color 100ms ease;
     cursor: pointer;
   }
   .mini-expand-btn:hover {
     transform: scale(1.1);
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--text-primary);
   }
 
   /* --- Crossfade track wrappers --- */
@@ -491,7 +491,7 @@
     cursor: pointer;
   }
   .cf-out:hover {
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--bg-elevated);
   }
 
   /* --- Track Info --- */

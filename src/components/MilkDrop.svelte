@@ -181,7 +181,7 @@
     top: 8px;
     left: 8px;
     font-size: 10px;
-    color: rgba(255,255,255,0.5);
+    color: var(--text-secondary);
     text-shadow: 0 1px 3px rgba(0,0,0,0.8);
     pointer-events: none;
     transition: opacity 300ms;

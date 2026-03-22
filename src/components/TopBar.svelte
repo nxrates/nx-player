@@ -132,12 +132,12 @@
     width: 26px;
     height: 26px;
     border-radius: 4px;
-    filter: brightness(0) invert(1);
-    opacity: 0.8;
+    filter: brightness(0) invert(0.8);
+    opacity: 1;
   }
   :global([data-theme="light"]) .app-logo {
     filter: none;
-    opacity: 0.8;
+    opacity: 1;
   }
 
   .app-title {
