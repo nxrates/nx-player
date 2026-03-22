@@ -351,8 +351,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Reserve space at bottom so art doesn't hide behind glass controls */
-    padding-bottom: 200px;
+    /* Reserve just enough for the glass controls */
+    padding-bottom: 150px;
   }
 
   .full-art {
