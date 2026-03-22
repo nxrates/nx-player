@@ -74,9 +74,9 @@ pub fn scan_folders(
                         if file_mtime != db_mtime {
                             return true;
                         }
-                        // Also rescan if BPM is missing
-                        match db::get_track_bpm(&db, &track_id) {
-                            Ok(Some(_)) => false,
+                        // Re-analyze if BPM missing or analysis version outdated
+                        match db::get_track_analysis_version(&db, &track_id) {
+                            Ok(Some(v)) if v >= crate::analyzer::ANALYSIS_VERSION => false,
                             _ => true,
                         }
                     }
@@ -216,7 +216,17 @@ fn extract_metadata(path: &Path, covers_dir: &Path) -> Option<Track> {
     let has_cover = covers::extract_cover(path, &track_id, covers_dir);
 
     let waveform = crate::waveform::extract_waveform(path);
-    let bpm = crate::analyzer::detect_bpm(path);
+    let analysis = crate::analyzer::analyze_track(path);
+
+    let (bpm, beat_grid, downbeats, key) = match &analysis {
+        Some(a) => (
+            Some(a.bpm),
+            Some(a.beat_positions.clone()),
+            Some(a.downbeats.clone()),
+            a.key.clone(),
+        ),
+        None => (None, None, None, None),
+    };
 
     Some(Track {
         id: track_id,
@@ -234,6 +244,11 @@ fn extract_metadata(path: &Path, covers_dir: &Path) -> Option<Track> {
         file_size,
         mtime,
         waveform,
+        source: "local".to_string(),
         bpm,
+        beat_grid,
+        downbeats,
+        key,
+        analysis_version: Some(crate::analyzer::ANALYSIS_VERSION),
     })
 }

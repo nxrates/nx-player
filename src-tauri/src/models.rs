@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+fn default_source() -> String {
+    "local".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: String,
@@ -17,10 +21,24 @@ pub struct Track {
     pub has_cover: bool,
     pub file_size: i64,
     pub mtime: i64,
+    #[serde(default = "default_source")]
+    pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waveform: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bpm: Option<f64>,
+    /// Beat grid: timestamps in seconds for every detected beat
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub beat_grid: Option<Vec<f64>>,
+    /// Downbeat (bar start) timestamps in seconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downbeats: Option<Vec<f64>>,
+    /// Musical key in Camelot notation (e.g., "8A", "11B")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Analysis algorithm version — bump to force re-analysis
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis_version: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
