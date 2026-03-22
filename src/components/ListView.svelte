@@ -26,6 +26,8 @@
   } = $props();
 
   let searchQuery = $state('');
+  let sourceFilter = $state<string>('all');
+  let formatFilter = $state<string>('all');
 
   let currentTrack = $derived(getCurrentTrack());
   let status = $derived(getStatus());
@@ -38,6 +40,18 @@
           t.album.toLowerCase().includes(searchQuery.toLowerCase())
         )
       : tracks
+  );
+
+  let sources = $derived([...new Set(tracks.map(t => t.source || 'local'))]);
+  let formats = $derived([...new Set(tracks.map(t => t.path.split('.').pop()?.toLowerCase() || ''))].filter(Boolean));
+
+  let displayTracks = $derived(
+    filteredTracks.filter(t => {
+      if (sourceFilter !== 'all' && (t.source || 'local') !== sourceFilter) return false;
+      const fmt = t.path.split('.').pop()?.toLowerCase() || '';
+      if (formatFilter !== 'all' && fmt !== formatFilter) return false;
+      return true;
+    })
   );
 </script>
 
@@ -60,11 +74,32 @@
     </div>
   {/if}
 
+  {#if sources.length > 1 || formats.length > 1}
+    <div class="filter-bar">
+      {#if sources.length > 1}
+        <div class="filter-group">
+          <button class="filter-pill" class:active={sourceFilter === 'all'} onclick={() => sourceFilter = 'all'}>All</button>
+          {#each sources as s}
+            <button class="filter-pill" class:active={sourceFilter === s} onclick={() => sourceFilter = s}>{s}</button>
+          {/each}
+        </div>
+      {/if}
+      {#if formats.length > 1}
+        <div class="filter-group">
+          <button class="filter-pill" class:active={formatFilter === 'all'} onclick={() => formatFilter = 'all'}>All</button>
+          {#each formats as f}
+            <button class="filter-pill" class:active={formatFilter === f} onclick={() => formatFilter = f}>.{f}</button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <div class="track-list">
-    {#if filteredTracks.length === 0}
+    {#if displayTracks.length === 0}
       <div class="empty">{emptyMessage}</div>
     {:else}
-      {#each filteredTracks as track, i}
+      {#each displayTracks as track, i}
         <TrackRow
           {track}
           isPlaying={currentTrack?.id === track.id && status !== 'stopped'}
@@ -144,5 +179,32 @@
     text-align: center;
     font-size: 14px;
     color: var(--text-tertiary);
+  }
+
+  .filter-bar {
+    display: flex;
+    gap: 6px;
+    padding: 4px 16px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+  .filter-group {
+    display: flex;
+    gap: 2px;
+  }
+  .filter-pill {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: var(--text-tertiary);
+    background: var(--bg-surface);
+    transition: all 150ms;
+  }
+  .filter-pill.active {
+    color: var(--text-primary);
+    background: var(--accent-dim);
+  }
+  .filter-pill:hover {
+    color: var(--text-secondary);
   }
 </style>
