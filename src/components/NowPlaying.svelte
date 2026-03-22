@@ -31,8 +31,8 @@
       milkdropExpanded = false;
       controlsHidden = false;
     } else {
-      await win.setSize(new LogicalSize(360, 640));
-      await win.setMinSize(new LogicalSize(360, 640));
+      await win.setSize(new LogicalSize(360, 560));
+      await win.setMinSize(new LogicalSize(360, 560));
     }
   }
 
@@ -351,8 +351,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Reserve just enough for the glass controls */
-    padding-bottom: 150px;
+    /* Reserve space for glass controls overlay */
+    padding-bottom: 130px;
   }
 
   .full-art {
@@ -388,7 +388,7 @@
   .controls-overlay {
     position: relative;
     z-index: 5;
-    padding: 8px 0 12px;
+    padding: 4px 0 4px;
   }
 
   .controls-overlay.glass {
@@ -573,9 +573,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 16px;
+    padding: 4px 16px 4px;
     flex-shrink: 0;
-    padding-bottom: 12px;
   }
 
   .transport-btn {
