@@ -4,7 +4,55 @@ use std::sync::Mutex;
 
 use crate::models::{ArtistSummary, Playlist, Settings, Track};
 
+/// Column list for track queries — single source of truth used by all SELECT track queries.
+const TRACK_COLS: &str = "id, path, title, artist, album, album_artist, genre, year, track_no, disc_no, duration, has_cover, file_size, mtime, bpm, beat_grid, downbeats, key, lufs, analysis_version";
+
 pub struct DbState(pub Mutex<Connection>);
+
+/// Shared row mapper: converts a DB row (20-column track query) into a Track struct.
+/// Used by get_all_tracks, get_track_by_id, get_tracks_by_artist, get_playlist_tracks.
+fn row_to_track(row: &rusqlite::Row) -> SqliteResult<Track> {
+    let beat_grid: Option<Vec<f64>> = row.get::<_, Option<Vec<u8>>>(15)?
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    let downbeats: Option<Vec<f64>> = row.get::<_, Option<Vec<u8>>>(16)?
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    Ok(Track {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        title: row.get(2)?,
+        artist: row.get(3)?,
+        album: row.get(4)?,
+        album_artist: row.get(5)?,
+        genre: row.get(6)?,
+        year: row.get(7)?,
+        track_no: row.get(8)?,
+        disc_no: row.get(9)?,
+        duration: row.get(10)?,
+        has_cover: row.get::<_, i32>(11)? != 0,
+        file_size: row.get(12)?,
+        mtime: row.get(13)?,
+        waveform: None,
+        source: "local".to_string(),
+        bpm: row.get(14)?,
+        beat_grid,
+        downbeats,
+        key: row.get(17)?,
+        lufs: row.get(18)?,
+        analysis_version: row.get(19)?,
+    })
+}
+
+/// Generic helper: query a single optional value, returning None on no rows.
+fn query_optional<T, F>(conn: &Connection, sql: &str, params: &[&dyn rusqlite::types::ToSql], f: F) -> SqliteResult<Option<T>>
+where
+    F: FnOnce(&rusqlite::Row) -> SqliteResult<T>,
+{
+    match conn.query_row(sql, params, f) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 
 pub fn initialize(db_path: &Path) -> SqliteResult<Connection> {
     let conn = Connection::open(db_path)?;
@@ -35,6 +83,9 @@ pub fn initialize(db_path: &Path) -> SqliteResult<Connection> {
         CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
         CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
         CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
+        CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
+        CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id);
+        CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track ON playlist_tracks(track_id);
 
         CREATE TABLE IF NOT EXISTS folders (
             path TEXT PRIMARY KEY
@@ -88,6 +139,9 @@ pub fn initialize(db_path: &Path) -> SqliteResult<Connection> {
         if !has("analysis_version") {
             conn.execute_batch("ALTER TABLE tracks ADD COLUMN analysis_version INTEGER;")?;
         }
+        if !has("lufs") {
+            conn.execute_batch("ALTER TABLE tracks ADD COLUMN lufs REAL;")?;
+        }
     }
 
     Ok(conn)
@@ -107,8 +161,8 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> SqliteResult<()> {
         .map(|db| serde_json::to_vec(db).unwrap_or_default());
 
     conn.execute(
-        "INSERT INTO tracks (id, path, title, artist, album, album_artist, genre, year, track_no, disc_no, duration, has_cover, file_size, mtime, waveform, bpm, beat_grid, downbeats, key, analysis_version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+        "INSERT INTO tracks (id, path, title, artist, album, album_artist, genre, year, track_no, disc_no, duration, has_cover, file_size, mtime, waveform, bpm, beat_grid, downbeats, key, lufs, analysis_version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
          ON CONFLICT(id) DO UPDATE SET
             path=excluded.path, title=excluded.title, artist=excluded.artist,
             album=excluded.album, album_artist=excluded.album_artist, genre=excluded.genre,
@@ -117,7 +171,7 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> SqliteResult<()> {
             file_size=excluded.file_size, mtime=excluded.mtime,
             waveform=excluded.waveform, bpm=excluded.bpm,
             beat_grid=excluded.beat_grid, downbeats=excluded.downbeats,
-            key=excluded.key, analysis_version=excluded.analysis_version",
+            key=excluded.key, lufs=excluded.lufs, analysis_version=excluded.analysis_version",
         params![
             track.id,
             track.path,
@@ -138,6 +192,7 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> SqliteResult<()> {
             beat_grid_blob,
             downbeats_blob,
             track.key,
+            track.lufs,
             track.analysis_version,
         ],
     )?;
@@ -176,50 +231,18 @@ pub fn get_all_tracks(
     };
 
     let sql = format!(
-        "SELECT id, path, title, artist, album, album_artist, genre, year, track_no, disc_no, duration, has_cover, file_size, mtime, bpm, beat_grid, downbeats, key, analysis_version FROM tracks{} ORDER BY {} COLLATE NOCASE {}",
-        where_clause, sort_col, order
+        "SELECT {} FROM tracks{} ORDER BY {} COLLATE NOCASE {}",
+        TRACK_COLS, where_clause, sort_col, order
     );
 
     let mut stmt = conn.prepare(&sql)?;
 
-    let row_mapper = |row: &rusqlite::Row| -> SqliteResult<Track> {
-        let beat_grid_blob: Option<Vec<u8>> = row.get(15)?;
-        let beat_grid: Option<Vec<f64>> = beat_grid_blob
-            .and_then(|b| serde_json::from_slice(&b).ok());
-        let downbeats_blob: Option<Vec<u8>> = row.get(16)?;
-        let downbeats: Option<Vec<f64>> = downbeats_blob
-            .and_then(|b| serde_json::from_slice(&b).ok());
-        Ok(Track {
-            id: row.get(0)?,
-            path: row.get(1)?,
-            title: row.get(2)?,
-            artist: row.get(3)?,
-            album: row.get(4)?,
-            album_artist: row.get(5)?,
-            genre: row.get(6)?,
-            year: row.get(7)?,
-            track_no: row.get(8)?,
-            disc_no: row.get(9)?,
-            duration: row.get(10)?,
-            has_cover: row.get::<_, i32>(11)? != 0,
-            file_size: row.get(12)?,
-            mtime: row.get(13)?,
-            waveform: None,
-            source: "local".to_string(),
-            bpm: row.get(14)?,
-            beat_grid,
-            downbeats,
-            key: row.get(17)?,
-            analysis_version: row.get(18)?,
-        })
-    };
-
     let tracks = if let Some(ref pattern) = search_param {
-        stmt.query_map(params![pattern], row_mapper)?
+        stmt.query_map(params![pattern], row_to_track)?
             .filter_map(|r| r.ok())
             .collect()
     } else {
-        stmt.query_map([], row_mapper)?
+        stmt.query_map([], row_to_track)?
             .filter_map(|r| r.ok())
             .collect()
     };
@@ -228,41 +251,8 @@ pub fn get_all_tracks(
 }
 
 pub fn get_track_by_id(conn: &Connection, id: &str) -> SqliteResult<Track> {
-    conn.query_row(
-        "SELECT id, path, title, artist, album, album_artist, genre, year, track_no, disc_no, duration, has_cover, file_size, mtime, bpm, beat_grid, downbeats, key, analysis_version FROM tracks WHERE id = ?1",
-        params![id],
-        |row| {
-            let beat_grid_blob: Option<Vec<u8>> = row.get(15)?;
-            let beat_grid: Option<Vec<f64>> = beat_grid_blob
-                .and_then(|b| serde_json::from_slice(&b).ok());
-            let downbeats_blob: Option<Vec<u8>> = row.get(16)?;
-            let downbeats: Option<Vec<f64>> = downbeats_blob
-                .and_then(|b| serde_json::from_slice(&b).ok());
-            Ok(Track {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                title: row.get(2)?,
-                artist: row.get(3)?,
-                album: row.get(4)?,
-                album_artist: row.get(5)?,
-                genre: row.get(6)?,
-                year: row.get(7)?,
-                track_no: row.get(8)?,
-                disc_no: row.get(9)?,
-                duration: row.get(10)?,
-                has_cover: row.get::<_, i32>(11)? != 0,
-                file_size: row.get(12)?,
-                mtime: row.get(13)?,
-                waveform: None,
-                source: "local".to_string(),
-                bpm: row.get(14)?,
-                beat_grid,
-                downbeats,
-                key: row.get(17)?,
-                analysis_version: row.get(18)?,
-            })
-        },
-    )
+    let sql = format!("SELECT {} FROM tracks WHERE id = ?1", TRACK_COLS);
+    conn.query_row(&sql, params![id], row_to_track)
 }
 
 pub fn get_artists(conn: &Connection) -> SqliteResult<Vec<ArtistSummary>> {
@@ -284,42 +274,13 @@ pub fn get_artists(conn: &Connection) -> SqliteResult<Vec<ArtistSummary>> {
 }
 
 pub fn get_tracks_by_artist(conn: &Connection, artist: &str) -> SqliteResult<Vec<Track>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, path, title, artist, album, album_artist, genre, year, track_no, disc_no, duration, has_cover, file_size, mtime, bpm, beat_grid, downbeats, key, analysis_version
-         FROM tracks WHERE artist = ?1 ORDER BY album COLLATE NOCASE ASC, disc_no ASC, track_no ASC",
-    )?;
+    let sql = format!(
+        "SELECT {} FROM tracks WHERE artist = ?1 ORDER BY album COLLATE NOCASE ASC, disc_no ASC, track_no ASC",
+        TRACK_COLS
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let tracks = stmt
-        .query_map(params![artist], |row| {
-            let beat_grid_blob: Option<Vec<u8>> = row.get(15)?;
-            let beat_grid: Option<Vec<f64>> = beat_grid_blob
-                .and_then(|b| serde_json::from_slice(&b).ok());
-            let downbeats_blob: Option<Vec<u8>> = row.get(16)?;
-            let downbeats: Option<Vec<f64>> = downbeats_blob
-                .and_then(|b| serde_json::from_slice(&b).ok());
-            Ok(Track {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                title: row.get(2)?,
-                artist: row.get(3)?,
-                album: row.get(4)?,
-                album_artist: row.get(5)?,
-                genre: row.get(6)?,
-                year: row.get(7)?,
-                track_no: row.get(8)?,
-                disc_no: row.get(9)?,
-                duration: row.get(10)?,
-                has_cover: row.get::<_, i32>(11)? != 0,
-                file_size: row.get(12)?,
-                mtime: row.get(13)?,
-                waveform: None,
-                source: "local".to_string(),
-                bpm: row.get(14)?,
-                beat_grid,
-                downbeats,
-                key: row.get(17)?,
-                analysis_version: row.get(18)?,
-            })
-        })?
+        .query_map(params![artist], row_to_track)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(tracks)
@@ -335,73 +296,36 @@ pub fn delete_tracks_not_in_paths(conn: &Connection, existing_paths: &[String]) 
         let count = conn.execute("DELETE FROM tracks", [])?;
         return Ok(count);
     }
-    // Get all track paths from DB and delete ones not in the existing set
+    // Use HashSet for O(1) lookup instead of Vec::contains O(n)
+    let path_set: std::collections::HashSet<&str> = existing_paths.iter().map(|s| s.as_str()).collect();
+
     let mut stmt = conn.prepare("SELECT id, path FROM tracks")?;
-    let rows: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+    let to_delete: Vec<String> = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .filter_map(|r| r.ok())
+        .filter(|(_, path)| !path_set.contains(path.as_str()))
+        .map(|(id, _)| id)
         .collect();
 
-    let mut removed = 0;
-    for (id, path) in &rows {
-        if !existing_paths.contains(path) {
-            conn.execute("DELETE FROM tracks WHERE id = ?1", params![id])?;
-            removed += 1;
-        }
+    let mut del_stmt = conn.prepare("DELETE FROM tracks WHERE id = ?1")?;
+    for id in &to_delete {
+        del_stmt.execute(params![id])?;
     }
-    Ok(removed)
+    Ok(to_delete.len())
 }
 
 pub fn get_track_mtime(conn: &Connection, id: &str) -> SqliteResult<Option<i64>> {
-    let result = conn.query_row(
-        "SELECT mtime FROM tracks WHERE id = ?1",
-        params![id],
-        |row| row.get(0),
-    );
-    match result {
-        Ok(mtime) => Ok(Some(mtime)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
-    }
+    query_optional(conn, "SELECT mtime FROM tracks WHERE id = ?1", &[&id], |row| row.get(0))
 }
 
 pub fn get_track_analysis_version(conn: &Connection, id: &str) -> SqliteResult<Option<i32>> {
-    let result = conn.query_row(
-        "SELECT analysis_version FROM tracks WHERE id = ?1",
-        params![id],
-        |row| row.get::<_, Option<i32>>(0),
-    );
-    match result {
-        Ok(v) => Ok(v),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-pub fn get_track_bpm(conn: &Connection, id: &str) -> SqliteResult<Option<f64>> {
-    let result = conn.query_row(
-        "SELECT bpm FROM tracks WHERE id = ?1",
-        params![id],
-        |row| row.get::<_, Option<f64>>(0),
-    );
-    match result {
-        Ok(bpm) => Ok(bpm),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
-    }
+    query_optional(conn, "SELECT analysis_version FROM tracks WHERE id = ?1", &[&id], |row| row.get::<_, Option<i32>>(0))
+        .map(|opt| opt.flatten())
 }
 
 pub fn get_waveform(conn: &Connection, id: &str) -> SqliteResult<Option<Vec<u8>>> {
-    let result = conn.query_row(
-        "SELECT waveform FROM tracks WHERE id = ?1",
-        params![id],
-        |row| row.get::<_, Option<Vec<u8>>>(0),
-    );
-    match result {
-        Ok(wf) => Ok(wf),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
-    }
+    query_optional(conn, "SELECT waveform FROM tracks WHERE id = ?1", &[&id], |row| row.get::<_, Option<Vec<u8>>>(0))
+        .map(|opt| opt.flatten())
 }
 
 // --- Folder queries ---
@@ -486,44 +410,14 @@ pub fn get_playlists(conn: &Connection) -> SqliteResult<Vec<Playlist>> {
 
 pub fn get_playlist_tracks(conn: &Connection, playlist_id: &str) -> SqliteResult<Vec<Track>> {
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.path, t.title, t.artist, t.album, t.album_artist, t.genre, t.year, t.track_no, t.disc_no, t.duration, t.has_cover, t.file_size, t.mtime, t.bpm, t.beat_grid, t.downbeats, t.key, t.analysis_version
-         FROM tracks t
-         INNER JOIN playlist_tracks pt ON pt.track_id = t.id
-         WHERE pt.playlist_id = ?1
-         ORDER BY pt.position ASC",
+        "SELECT t.id, t.path, t.title, t.artist, t.album, t.album_artist, t.genre, t.year, \
+         t.track_no, t.disc_no, t.duration, t.has_cover, t.file_size, t.mtime, t.bpm, \
+         t.beat_grid, t.downbeats, t.key, t.lufs, t.analysis_version \
+         FROM tracks t INNER JOIN playlist_tracks pt ON pt.track_id = t.id \
+         WHERE pt.playlist_id = ?1 ORDER BY pt.position ASC",
     )?;
     let tracks = stmt
-        .query_map(params![playlist_id], |row| {
-            let beat_grid_blob: Option<Vec<u8>> = row.get(15)?;
-            let beat_grid: Option<Vec<f64>> = beat_grid_blob
-                .and_then(|b| serde_json::from_slice(&b).ok());
-            let downbeats_blob: Option<Vec<u8>> = row.get(16)?;
-            let downbeats: Option<Vec<f64>> = downbeats_blob
-                .and_then(|b| serde_json::from_slice(&b).ok());
-            Ok(Track {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                title: row.get(2)?,
-                artist: row.get(3)?,
-                album: row.get(4)?,
-                album_artist: row.get(5)?,
-                genre: row.get(6)?,
-                year: row.get(7)?,
-                track_no: row.get(8)?,
-                disc_no: row.get(9)?,
-                duration: row.get(10)?,
-                has_cover: row.get::<_, i32>(11)? != 0,
-                file_size: row.get(12)?,
-                mtime: row.get(13)?,
-                waveform: None,
-                source: "local".to_string(),
-                bpm: row.get(14)?,
-                beat_grid,
-                downbeats,
-                key: row.get(17)?,
-                analysis_version: row.get(18)?,
-            })
-        })?
+        .query_map(params![playlist_id], row_to_track)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(tracks)
@@ -623,9 +517,11 @@ pub fn get_settings(conn: &Connection) -> SqliteResult<Settings> {
 }
 
 pub fn update_settings(conn: &Connection, settings: &Settings) -> SqliteResult<()> {
-    let pairs = [
+    let speed_str = settings.playback_speed.to_string();
+    let pairs: [(&str, &str); 3] = [
         ("theme", settings.theme.as_str()),
         ("default_view", settings.default_view.as_str()),
+        ("playback_speed", &speed_str),
     ];
     for (key, value) in &pairs {
         conn.execute(
@@ -634,10 +530,5 @@ pub fn update_settings(conn: &Connection, settings: &Settings) -> SqliteResult<(
             params![key, value],
         )?;
     }
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params!["playback_speed", settings.playback_speed.to_string()],
-    )?;
     Ok(())
 }

@@ -36,6 +36,9 @@ pub struct Track {
     /// Musical key in Camelot notation (e.g., "8A", "11B")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// EBU R128 integrated loudness in LUFS
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lufs: Option<f64>,
     /// Analysis algorithm version — bump to force re-analysis
     #[serde(skip_serializing_if = "Option::is_none")]
     pub analysis_version: Option<i32>,

@@ -1,10 +1,11 @@
 use tauri::State;
 
+use super::LockExt;
 use crate::extensions::{ExtMessage, ExtensionHostState, ExtensionInfo};
 
 #[tauri::command]
 pub fn list_extensions(host: State<'_, ExtensionHostState>) -> Result<Vec<ExtensionInfo>, String> {
-    let host = host.0.lock().map_err(|e| e.to_string())?;
+    let host = host.0.acquire()?;
     Ok(host.list())
 }
 
@@ -13,7 +14,7 @@ pub fn install_extension(
     path: String,
     host: State<'_, ExtensionHostState>,
 ) -> Result<String, String> {
-    let mut host = host.0.lock().map_err(|e| e.to_string())?;
+    let mut host = host.0.acquire()?;
     host.install(std::path::Path::new(&path))
 }
 
@@ -22,19 +23,19 @@ pub fn uninstall_extension(
     id: String,
     host: State<'_, ExtensionHostState>,
 ) -> Result<(), String> {
-    let mut host = host.0.lock().map_err(|e| e.to_string())?;
+    let mut host = host.0.acquire()?;
     host.uninstall(&id)
 }
 
 #[tauri::command]
 pub fn start_extension(id: String, host: State<'_, ExtensionHostState>) -> Result<(), String> {
-    let mut host = host.0.lock().map_err(|e| e.to_string())?;
+    let mut host = host.0.acquire()?;
     host.start(&id)
 }
 
 #[tauri::command]
 pub fn stop_extension(id: String, host: State<'_, ExtensionHostState>) -> Result<(), String> {
-    let mut host = host.0.lock().map_err(|e| e.to_string())?;
+    let mut host = host.0.acquire()?;
     host.stop(&id);
     Ok(())
 }
@@ -45,7 +46,7 @@ pub fn extension_search(
     query: String,
     host: State<'_, ExtensionHostState>,
 ) -> Result<serde_json::Value, String> {
-    let mut host = host.0.lock().map_err(|e| e.to_string())?;
+    let mut host = host.0.acquire()?;
     // Start if not running
     if !host.list().iter().any(|e| e.id == id && e.running) {
         host.start(&id)?;

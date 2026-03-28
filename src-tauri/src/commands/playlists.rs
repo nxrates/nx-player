@@ -1,12 +1,13 @@
 use std::io::Write;
 use tauri::State;
 
+use super::LockExt;
 use crate::db::{self, DbState};
 use crate::models::{Playlist, Track};
 
 #[tauri::command]
 pub fn create_playlist(name: String, db_state: State<'_, DbState>) -> Result<Playlist, String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     let id = uuid::Uuid::new_v4().to_string();
     db::create_playlist(&conn, &id, &name).map_err(|e| e.to_string())
 }
@@ -17,19 +18,19 @@ pub fn rename_playlist(
     name: String,
     db_state: State<'_, DbState>,
 ) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     db::rename_playlist(&conn, &id, &name).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn delete_playlist(id: String, db_state: State<'_, DbState>) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     db::delete_playlist(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_playlists(db_state: State<'_, DbState>) -> Result<Vec<Playlist>, String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     db::get_playlists(&conn).map_err(|e| e.to_string())
 }
 
@@ -38,7 +39,7 @@ pub fn get_playlist_tracks(
     id: String,
     db_state: State<'_, DbState>,
 ) -> Result<Vec<Track>, String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     db::get_playlist_tracks(&conn, &id).map_err(|e| e.to_string())
 }
 
@@ -48,7 +49,7 @@ pub fn add_to_playlist(
     track_ids: Vec<String>,
     db_state: State<'_, DbState>,
 ) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     db::add_tracks_to_playlist(&conn, &playlist_id, &track_ids).map_err(|e| e.to_string())
 }
 
@@ -58,7 +59,7 @@ pub fn remove_from_playlist(
     track_id: String,
     db_state: State<'_, DbState>,
 ) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     db::remove_track_from_playlist(&conn, &playlist_id, &track_id).map_err(|e| e.to_string())
 }
 
@@ -68,7 +69,7 @@ pub fn reorder_playlist(
     track_ids: Vec<String>,
     db_state: State<'_, DbState>,
 ) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     db::reorder_playlist_tracks(&conn, &playlist_id, &track_ids).map_err(|e| e.to_string())
 }
 
@@ -78,7 +79,7 @@ pub fn export_playlist_m3u(
     path: String,
     db_state: State<'_, DbState>,
 ) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.0.acquire()?;
     let tracks = db::get_playlist_tracks(&conn, &id).map_err(|e| e.to_string())?;
 
     let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;

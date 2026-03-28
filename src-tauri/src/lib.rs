@@ -1,4 +1,5 @@
 mod analyzer;
+mod audio;
 mod commands;
 mod covers;
 mod covers_fetch;
@@ -8,13 +9,14 @@ mod models;
 mod scanner;
 mod waveform;
 
+use commands::audio::{AudioEngineState, PlaybackReceiver};
 use covers::CoversDir;
 use db::DbState;
 use std::sync::Mutex;
 use tauri::Manager;
 
 #[cfg(target_os = "macos")]
-fn apply_macos_window_rounding(app: &tauri::App) {
+fn apply_macos_window_tweaks(app: &tauri::App) {
     use raw_window_handle::HasWindowHandle;
 
     let Some(window) = app.get_webview_window("main") else {
@@ -30,26 +32,14 @@ fn apply_macos_window_rounding(app: &tauri::App) {
             let ns_window: *mut objc2::runtime::AnyObject =
                 objc2::msg_send![ns_view, window];
 
-            let current_mask: u64 = objc2::msg_send![ns_window, styleMask];
-            let new_mask: u64 = current_mask
-                | (1 << 0)   // NSTitledWindowMask
-                | (1 << 1)   // NSClosableWindowMask
-                | (1 << 2)   // NSMiniaturizableWindowMask
-                | (1 << 3)   // NSResizableWindowMask
-                | (1 << 15); // NSFullSizeContentViewWindowMask
-            let _: () = objc2::msg_send![ns_window, setStyleMask: new_mask];
+            // With titleBarStyle: Overlay and decorations: true in tauri.conf.json,
+            // Tauri/tao already sets the correct style mask:
+            //   Titled | Closable | Miniaturizable | Resizable | FullSizeContentView
+            // This preserves native resize handling at window edges while giving us
+            // a transparent overlay titlebar. No manual styleMask override needed.
 
-            let _: () = objc2::msg_send![ns_window, setTitlebarAppearsTransparent: true];
-            let _: () = objc2::msg_send![ns_window, setTitleVisibility: 1_i64];
-            // Note: setMovableByWindowBackground removed — it conflicts with resize edges.
-            // Dragging is handled via data-tauri-drag-region on the topbar instead.
-
-            let toolbar: *mut objc2::runtime::AnyObject =
-                objc2::msg_send![ns_window, toolbar];
-            if !toolbar.is_null() {
-                let _: () = objc2::msg_send![toolbar, setVisible: false];
-            }
-
+            // Hide the traffic light buttons (close/minimize/zoom) since we have
+            // a fully custom UI. They remain functional via keyboard shortcuts.
             for i in 0_i64..3 {
                 let btn: *mut objc2::runtime::AnyObject =
                     objc2::msg_send![ns_window, standardWindowButton: i];
@@ -104,15 +94,115 @@ fn default_music_dirs() -> Vec<String> {
         .collect()
 }
 
+/// Handle a stream:// request — serves audio files with no-cache headers and Range support.
+fn handle_stream_request(request: &http::Request<Vec<u8>>) -> http::Response<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let uri_path = percent_encoding::percent_decode_str(request.uri().path())
+        .decode_utf8_lossy()
+        .to_string();
+    let path = if uri_path.starts_with('/') { &uri_path[1..] } else { &uri_path };
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return http::Response::builder()
+            .status(404)
+            .header("Cache-Control", "no-store")
+            .body(b"Not found".to_vec())
+            .unwrap();
+    };
+    let Ok(meta) = file.metadata() else {
+        return http::Response::builder()
+            .status(500)
+            .header("Cache-Control", "no-store")
+            .body(b"Cannot read file".to_vec())
+            .unwrap();
+    };
+    let len = meta.len();
+
+    // Guess MIME type from extension
+    let mime = match std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+    {
+        "mp3" => "audio/mpeg",
+        "m4a" | "aac" => "audio/mp4",
+        "flac" => "audio/flac",
+        "ogg" | "opus" => "audio/ogg",
+        "wav" => "audio/wav",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        _ => "application/octet-stream",
+    };
+
+    // Check for Range header (HTMLAudioElement always sends these)
+    if let Some(range_val) = request.headers().get("range").and_then(|v| v.to_str().ok()) {
+        let range = range_val.trim_start_matches("bytes=");
+        let parts: Vec<&str> = range.split('-').collect();
+        let start: u64 = parts[0].parse().unwrap_or(0);
+        let end: u64 = if parts.len() > 1 && !parts[1].is_empty() {
+            parts[1].parse().unwrap_or(len - 1)
+        } else {
+            len - 1
+        };
+        // Cap chunk to 512KB to limit memory per response
+        let end = end.min(start + 512 * 1024 - 1).min(len - 1);
+        let chunk_len = (end - start + 1) as usize;
+
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return http::Response::builder()
+                .status(500)
+                .header("Cache-Control", "no-store")
+                .body(b"Seek failed".to_vec())
+                .unwrap();
+        }
+        let mut buf = vec![0u8; chunk_len];
+        if file.read_exact(&mut buf).is_err() {
+            buf.truncate(0); // partial read
+        }
+
+        http::Response::builder()
+            .status(206)
+            .header("Content-Type", mime)
+            .header("Content-Length", chunk_len)
+            .header("Content-Range", format!("bytes {start}-{end}/{len}"))
+            .header("Accept-Ranges", "bytes")
+            .header("Cache-Control", "no-store, no-cache")
+            .body(buf)
+            .unwrap()
+    } else {
+        // Full request (rare for audio, but handle it)
+        let mut buf = Vec::with_capacity(len as usize);
+        let _ = file.read_to_end(&mut buf);
+
+        http::Response::builder()
+            .status(200)
+            .header("Content-Type", mime)
+            .header("Content-Length", len)
+            .header("Accept-Ranges", "bytes")
+            .header("Cache-Control", "no-store, no-cache")
+            .body(buf)
+            .unwrap()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // Custom streaming protocol: serves audio with Cache-Control: no-store
+        // so WKWebView doesn't cache every played file in memory forever.
+        .register_asynchronous_uri_scheme_protocol("stream", |_ctx, request, responder| {
+            std::thread::spawn(move || {
+                let resp = handle_stream_request(&request);
+                responder.respond(resp);
+            });
+        })
         .setup(|app| {
-            // Apply rounded corners on macOS
+            // Apply macOS window tweaks (hide traffic lights, ensure shadow)
             #[cfg(target_os = "macos")]
-            apply_macos_window_rounding(app);
+            apply_macos_window_tweaks(app);
 
             // Create app data directories
             let app_data_dir = app
@@ -148,6 +238,12 @@ pub fn run() {
             app.manage(extensions::ExtensionHostState(Mutex::new(
                 extensions::ExtensionHost::new(ext_dir),
             )));
+
+            // Initialize audio engine
+            let (audio_engine, playback_rx) = audio::engine::AudioEngine::new()
+                .expect("Failed to initialize audio engine");
+            app.manage(AudioEngineState(std::sync::Mutex::new(audio_engine)));
+            app.manage(PlaybackReceiver(std::sync::Mutex::new(playback_rx)));
 
             // Manage state
             app.manage(DbState(Mutex::new(conn)));
@@ -212,6 +308,17 @@ pub fn run() {
             commands::extensions::start_extension,
             commands::extensions::stop_extension,
             commands::extensions::extension_search,
+            commands::audio::audio_play,
+            commands::audio::audio_pause,
+            commands::audio::audio_stop,
+            commands::audio::audio_load,
+            commands::audio::audio_seek,
+            commands::audio::audio_set_volume,
+            commands::audio::audio_set_playback_rate,
+            commands::audio::audio_start_crossfade,
+            commands::audio::audio_cancel_crossfade,
+            commands::audio::audio_set_visualization,
+            commands::audio::audio_get_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

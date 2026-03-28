@@ -12,14 +12,20 @@
   "app": {
     "windows": [
       {
-        "title": "NX Player",
+        "title": "",
+        "label": "main",
         "width": 360,
         "height": 560,
         "minWidth": 360,
         "minHeight": 140,
-        "decorations": false,
+        "decorations": true,
         "transparent": false,
-        "resizable": true
+        "resizable": true,
+        "acceptFirstMouse": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "shadow": true,
+        "incognito": true
       }
     ],
     "trayIcon": {
@@ -28,11 +34,7 @@
       "tooltip": "NX Player"
     },
     "security": {
-      "csp": null,
-      "assetProtocol": {
-        "enable": true,
-        "scope": ["**"]
-      }
+      "csp": null
     }
   },
   "bundle": {

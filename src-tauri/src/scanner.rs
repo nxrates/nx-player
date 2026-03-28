@@ -74,9 +74,9 @@ pub fn scan_folders(
                         if file_mtime != db_mtime {
                             return true;
                         }
-                        // Re-analyze if BPM missing
-                        match db::get_track_bpm(&db, &track_id) {
-                            Ok(Some(_)) => false,
+                        // Re-analyze if analysis version outdated
+                        match db::get_track_analysis_version(&db, &track_id) {
+                            Ok(Some(v)) if v >= crate::analyzer::ANALYSIS_VERSION => false,
                             _ => true,
                         }
                     }
@@ -87,11 +87,18 @@ pub fn scan_folders(
             .collect()
     };
 
-    // Phase 3: Extract metadata in parallel
+    // Phase 3: Extract metadata in parallel (limited to 2 threads to cap peak RAM)
+    // Each file decodes up to ~50MB mono audio + ~200MB stratum-dsp analysis buffers.
+    // 2 threads = ~500MB peak vs 10 threads = ~2.5GB peak.
+    let scan_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().build().unwrap());
+
     let processed = std::sync::atomic::AtomicUsize::new(0);
     let app_handle_ref = app_handle.clone();
 
-    let tracks: Vec<Track> = files_to_scan
+    let tracks: Vec<Track> = scan_pool.install(|| files_to_scan
         .par_iter()
         .filter_map(|path| {
             let result = extract_metadata(path, covers_dir);
@@ -108,7 +115,8 @@ pub fn scan_folders(
             }
             result
         })
-        .collect();
+        .collect()
+    ); // end scan_pool.install
 
     // Phase 4: Batch insert into DB
     {
@@ -215,8 +223,19 @@ fn extract_metadata(path: &Path, covers_dir: &Path) -> Option<Track> {
 
     let has_cover = covers::extract_cover(path, &track_id, covers_dir);
 
-    let waveform = crate::waveform::extract_waveform(path);
-    let bpm = crate::analyzer::detect_bpm(path);
+    // Single decode pass: produces both waveform and analysis (was 2 separate decodes)
+    let (waveform, analysis) = crate::analyzer::analyze_and_extract_waveform(path);
+
+    let (bpm, beat_grid, downbeats, key, lufs) = match &analysis {
+        Some(a) => (
+            Some(a.bpm),
+            Some(a.beat_positions.clone()),
+            Some(a.downbeats.clone()),
+            a.key.clone(),
+            a.lufs,
+        ),
+        None => (None, None, None, None, None),
+    };
 
     Some(Track {
         id: track_id,
@@ -236,9 +255,10 @@ fn extract_metadata(path: &Path, covers_dir: &Path) -> Option<Track> {
         waveform,
         source: "local".to_string(),
         bpm,
-        beat_grid: None,
-        downbeats: None,
-        key: None,
-        analysis_version: None,
+        beat_grid,
+        downbeats,
+        key,
+        lufs,
+        analysis_version: Some(crate::analyzer::ANALYSIS_VERSION),
     })
 }

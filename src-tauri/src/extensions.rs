@@ -177,12 +177,6 @@ impl ExtensionHost {
         Ok(())
     }
 
-    pub fn stop_all(&mut self) {
-        let ids: Vec<String> = self.processes.keys().cloned().collect();
-        for id in ids {
-            self.stop(&id);
-        }
-    }
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
