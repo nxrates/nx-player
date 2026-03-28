@@ -41,9 +41,16 @@ export function setSort(column: string) {
   loadTracks();
 }
 
+// Debounce search to avoid IPC call on every keystroke
+let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+
 export function setSearch(query: string) {
   searchQuery = query;
-  loadTracks();
+  if (searchTimeout) clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    searchTimeout = null;
+    loadTracks();
+  }, 200);
 }
 
 export async function startScan(scanFolders: string[]) {
@@ -58,7 +65,12 @@ export async function startScan(scanFolders: string[]) {
   // Progress/completion is tracked via the scan-progress event listener.
 }
 
+// Guard against multiple listener registrations
+let scanListenerInitialized = false;
+
 export async function initScanListener() {
+  if (scanListenerInitialized) return;
+  scanListenerInitialized = true;
   await listen<ScanProgress>('scan-progress', (event) => {
     scanProgress = event.payload;
     if (event.payload.phase === 'complete') {

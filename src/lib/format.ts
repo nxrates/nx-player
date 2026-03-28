@@ -9,3 +9,11 @@ export function formatDuration(seconds: number): string {
   }
   return `${mins}:${String(secs).padStart(2, '0')}`;
 }
+
+export function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+export function randomIndex(length: number): number {
+  return length > 0 ? Math.floor(Math.random() * length) : 0;
+}

@@ -1,20 +1,27 @@
+import { StretchNode } from './stretch-node';
+
+type Deck = {
+  el: HTMLAudioElement;
+  src: MediaElementAudioSourceNode | null;
+  gain: GainNode | null;
+  st: StretchNode | null; // Signalsmith Stretch WASM time-stretcher
+};
+
 export class AudioPlayer {
   private ctx: AudioContext | null = null;
-  private deckA: { el: HTMLAudioElement; src: MediaElementAudioSourceNode | null; gain: GainNode | null };
-  private deckB: { el: HTMLAudioElement; src: MediaElementAudioSourceNode | null; gain: GainNode | null };
+  private deckA: Deck;
+  private deckB: Deck;
   private activeDeck: 'A' | 'B' = 'A';
   private crossfading = false;
   private crossfadeTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private analyser: AnalyserNode | null = null;
   private masterGain: GainNode | null = null;
+  private stretchRegistered = false;
 
-  // Smooth playback rate ramping (avoids audio glitches)
   private targetRate = 1;
   private currentRate = 1;
-  private rateAnimationId: number | null = null;
   private incomingTargetRate = 1;
   private incomingCurrentRate = 1;
-  private incomingRateAnimationId: number | null = null;
 
   // Callbacks
   onTimeUpdate: ((time: number) => void) | null = null;
@@ -24,8 +31,15 @@ export class AudioPlayer {
   onCrossfadeComplete: (() => void) | null = null;
 
   constructor() {
-    this.deckA = { el: new Audio(), src: null, gain: null };
-    this.deckB = { el: new Audio(), src: null, gain: null };
+    this.deckA = { el: new Audio(), src: null, gain: null, st: null };
+    this.deckB = { el: new Audio(), src: null, gain: null, st: null };
+
+    // CRITICAL: preservesPitch = false because SoundTouch handles pitch preservation.
+    // If true, the browser applies its own WSOLA on top of SoundTouch → double processing → artifacts.
+    for (const deck of [this.deckA, this.deckB]) {
+      deck.el.preservesPitch = false;
+      (deck.el as any).webkitPreservesPitch = false;
+    }
 
     // Wire events to active deck
     for (const deck of [this.deckA, this.deckB]) {
@@ -55,27 +69,75 @@ export class AudioPlayer {
   private async ensureContext() {
     if (!this.ctx) {
       this.ctx = new AudioContext();
-      // Create source nodes and gain nodes
+
+      // Register Signalsmith Stretch WASM AudioWorklet (once)
+      if (!this.stretchRegistered) {
+        try {
+          await StretchNode.register(this.ctx);
+          this.stretchRegistered = true;
+        } catch (e) {
+          console.warn('Signalsmith Stretch WASM registration failed, falling back to native:', e);
+          for (const deck of [this.deckA, this.deckB]) {
+            deck.el.preservesPitch = true;
+            (deck.el as any).webkitPreservesPitch = true;
+          }
+        }
+      }
+
       // Master gain for volume control (0-2.0 for VLC-style amplification)
       this.masterGain = this.ctx.createGain();
       this.masterGain.connect(this.ctx.destination);
 
+      // Wire chain: src → StretchNode (WASM) → gain → masterGain
       for (const deck of [this.deckA, this.deckB]) {
         deck.src = this.ctx.createMediaElementSource(deck.el);
         deck.gain = this.ctx.createGain();
-        deck.src.connect(deck.gain);
+
+        if (this.stretchRegistered) {
+          deck.st = new StretchNode(this.ctx);
+          await deck.st.ready; // Wait for WASM to initialize
+          deck.src.connect(deck.st);
+          deck.st.connect(deck.gain);
+        } else {
+          deck.src.connect(deck.gain);
+        }
+
         deck.gain.connect(this.masterGain);
       }
       this.deckA.gain!.gain.setValueAtTime(1, this.ctx.currentTime);
       this.deckB.gain!.gain.setValueAtTime(0, this.ctx.currentTime);
 
-      // AnalyserNode — passive tap on master gain for visualizers
+      // AnalyserNode — created but NOT connected until visualizer requests it
       this.analyser = this.ctx.createAnalyser();
-      this.analyser.fftSize = 2048;
+      this.analyser.fftSize = 1024;
       this.analyser.smoothingTimeConstant = 0.0;
-      this.masterGain.connect(this.analyser);
     }
     if (this.ctx.state === 'suspended') await this.ctx.resume();
+  }
+
+  /** Release all media resources from a deck (frees decoded PCM + WASM heap). */
+  private releaseDeck(deck: Deck) {
+    deck.el.pause();
+    deck.el.removeAttribute('src');
+    deck.el.load(); // triggers "media element load algorithm" → releases decoded buffers
+    // Destroy StretchNode to free its 16MB WASM heap
+    if (deck.st) {
+      deck.st.destroy();
+      deck.st = null;
+    }
+  }
+
+  /** Ensure a deck has a live StretchNode (recreate if destroyed after crossfade). */
+  private async ensureStretch(deck: Deck) {
+    if (deck.st || !this.stretchRegistered || !this.ctx) return;
+    deck.st = new StretchNode(this.ctx);
+    await deck.st.ready;
+    // Rewire: disconnect src from gain, insert stretch in between
+    if (deck.src && deck.gain) {
+      try { deck.src.disconnect(deck.gain); } catch {}
+      deck.src.connect(deck.st);
+      deck.st.connect(deck.gain);
+    }
   }
 
   private getActiveDeckObj() {
@@ -88,6 +150,7 @@ export class AudioPlayer {
   async play(src: string, metadata?: { title?: string; artist?: string; album?: string; artwork?: string }) {
     await this.ensureContext();
     const deck = this.getActiveDeckObj();
+    await this.ensureStretch(deck);
     deck.el.src = src;
     deck.gain!.gain.cancelScheduledValues(0);
     deck.gain!.gain.setValueAtTime(1, this.ctx!.currentTime);
@@ -111,23 +174,40 @@ export class AudioPlayer {
     const outgoing = this.getActiveDeckObj();
     const incoming = this.getInactiveDeckObj();
 
-    // Cancel any prior automation on both decks before setting up new values
-    const preNow = this.ctx!.currentTime;
-    outgoing.gain!.gain.cancelScheduledValues(0);
+    // Ensure incoming deck has a StretchNode (may have been destroyed after last crossfade)
+    await this.ensureStretch(incoming);
+
+    // 1. Set incoming gain to ZERO before anything — no audible bleed
     incoming.gain!.gain.cancelScheduledValues(0);
+    incoming.gain!.gain.setValueAtTime(0, this.ctx!.currentTime);
 
-    // Set incoming gain to 0 via automation API (NOT .value — direct assignment
-    // conflicts with setValueCurveAtTime in some browsers)
-    incoming.gain!.gain.setValueAtTime(0, preNow);
-    // Ensure outgoing is at full volume
-    outgoing.gain!.gain.setValueAtTime(1, preNow);
+    // 2. Set incoming playback rate IMMEDIATELY since it's inaudible at gain=0
+    incoming.el.playbackRate = this.incomingTargetRate;
+    if (incoming.st) {
+      incoming.st.setSpeed(this.incomingTargetRate);
+    }
+    this.incomingCurrentRate = this.incomingTargetRate;
 
+    // 3. Load and preload the incoming track before starting the fade
     incoming.el.src = nextSrc;
+    incoming.el.preload = 'auto';
+
+    // Wait for enough data to play smoothly (canplaythrough = browser estimates no buffering needed)
+    await new Promise<void>((resolve) => {
+      const onReady = () => { incoming.el.removeEventListener('canplaythrough', onReady); resolve(); };
+      // If already ready (cached), resolve immediately
+      if (incoming.el.readyState >= 4) { resolve(); return; }
+      incoming.el.addEventListener('canplaythrough', onReady, { once: true });
+      // Timeout fallback: don't wait forever if stream is slow
+      setTimeout(resolve, 2000);
+    });
+
     await incoming.el.play();
 
-    // Equal power crossfade curves
+    // 4. Schedule crossfade curves AFTER play started
+    // Use a 50ms offset to let the decoder settle (avoids initial click/pop)
     const dur = durationMs / 1000;
-    const steps = 64;
+    const steps = 128; // More steps = smoother curve (was 64)
     const curveOut = new Float32Array(steps);
     const curveIn = new Float32Array(steps);
     for (let i = 0; i < steps; i++) {
@@ -136,8 +216,7 @@ export class AudioPlayer {
       curveIn[i] = Math.sin(p * Math.PI / 2);
     }
 
-    // Schedule the crossfade curves — use a tiny offset to avoid start-time races
-    const fadeStart = this.ctx!.currentTime + 0.005;
+    const fadeStart = this.ctx!.currentTime + 0.05; // 50ms settle time
     outgoing.gain!.gain.cancelScheduledValues(0);
     incoming.gain!.gain.cancelScheduledValues(0);
     outgoing.gain!.gain.setValueAtTime(1, fadeStart);
@@ -145,14 +224,12 @@ export class AudioPlayer {
     outgoing.gain!.gain.setValueCurveAtTime(curveOut, fadeStart, dur);
     incoming.gain!.gain.setValueCurveAtTime(curveIn, fadeStart, dur);
 
-    // After crossfade completes
+    // 5. After crossfade completes — swap decks, release outgoing
     if (this.crossfadeTimeoutId) clearTimeout(this.crossfadeTimeoutId);
     this.crossfadeTimeoutId = setTimeout(() => {
       this.crossfadeTimeoutId = null;
       this.activeDeck = this.activeDeck === 'A' ? 'B' : 'A';
-      outgoing.el.pause();
-      outgoing.el.src = '';
-      // Use automation API to set gain after crossfade
+      this.releaseDeck(outgoing);
       outgoing.gain!.gain.cancelScheduledValues(0);
       outgoing.gain!.gain.setValueAtTime(0, this.ctx!.currentTime);
       incoming.gain!.gain.cancelScheduledValues(0);
@@ -167,7 +244,7 @@ export class AudioPlayer {
           artwork: metadata.artwork ? [{ src: metadata.artwork }] : [],
         });
       }
-    }, durationMs);
+    }, durationMs + 50); // +50ms to account for the settle offset
   }
 
   cancelCrossfade() {
@@ -188,8 +265,7 @@ export class AudioPlayer {
     // Stop the incoming deck
     incoming.gain!.gain.cancelScheduledValues(0);
     incoming.gain!.gain.setValueAtTime(0, now);
-    incoming.el.pause();
-    incoming.el.src = '';
+    this.releaseDeck(incoming);
 
     // Restore outgoing deck to full volume
     outgoing.gain!.gain.cancelScheduledValues(0);
@@ -201,13 +277,45 @@ export class AudioPlayer {
   getAnalyser(): AnalyserNode | null { return this.analyser; }
   getContext(): AudioContext | null { return this.ctx; }
 
-  pause() { this.getActiveDeckObj().el.pause(); }
-  resume() { this.getActiveDeckObj().el.play(); }
+  /** Get the total audio output latency in seconds (for audio-visual sync compensation). */
+  getOutputLatency(): number {
+    if (!this.ctx) return 0;
+    // outputLatency: time from audio graph to speakers (hardware dependent)
+    // baseLatency: processing latency within the graph
+    return (this.ctx.outputLatency ?? 0) + (this.ctx.baseLatency ?? 0);
+  }
+
+  /** Connect analyser to audio graph (for visualizer). */
+  connectAnalyser() {
+    if (this.analyser && this.masterGain) {
+      try { this.masterGain.connect(this.analyser); } catch {}
+    }
+  }
+
+  /** Disconnect analyser from audio graph (saves CPU when visualizer hidden). */
+  disconnectAnalyser() {
+    if (this.analyser) {
+      try { this.masterGain?.disconnect(this.analyser); } catch {}
+      try { this.analyser.disconnect(); } catch {}
+    }
+  }
+
+  pause() {
+    this.getActiveDeckObj().el.pause();
+    // Suspend AudioContext to stop processing the audio graph (saves CPU when idle)
+    if (this.ctx && this.ctx.state === 'running') this.ctx.suspend();
+  }
+  async resume() {
+    if (this.ctx && this.ctx.state === 'suspended') await this.ctx.resume();
+    this.getActiveDeckObj().el.play();
+  }
   pauseAll() {
     this.deckA.el.pause();
     this.deckB.el.pause();
+    if (this.ctx && this.ctx.state === 'running') this.ctx.suspend();
   }
   resumeAll() {
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
     this.deckA.el.play();
     this.deckB.el.play();
   }
@@ -225,44 +333,24 @@ export class AudioPlayer {
 
   setPlaybackRate(r: number) {
     this.targetRate = r;
-    if (!this.rateAnimationId) {
-      this.animateRate();
+    this.currentRate = r;
+    const deck = this.getActiveDeckObj();
+    deck.el.playbackRate = r;
+    // Tell Signalsmith Stretch the current speed so it compensates pitch
+    if (deck.st) {
+      deck.st.setSpeed(r);
     }
   }
 
-  private animateRate() {
-    const diff = this.targetRate - this.currentRate;
-    if (Math.abs(diff) < 0.001) {
-      this.currentRate = this.targetRate;
-      this.getActiveDeckObj().el.playbackRate = this.currentRate;
-      this.rateAnimationId = null;
-      return;
-    }
-    // Ease toward target (~200ms ramp via lerp factor 0.15 per frame at 60fps)
-    this.currentRate += diff * 0.15;
-    this.getActiveDeckObj().el.playbackRate = this.currentRate;
-    this.rateAnimationId = requestAnimationFrame(() => this.animateRate());
-  }
-
+  /** Set the incoming deck's playback rate (for BPM matching during crossfade). */
   setIncomingPlaybackRate(r: number) {
     this.incomingTargetRate = r;
-    if (!this.incomingRateAnimationId) {
-      this.animateIncomingRate();
+    this.incomingCurrentRate = r;
+    const deck = this.getInactiveDeckObj();
+    deck.el.playbackRate = r;
+    if (deck.st) {
+      deck.st.setSpeed(r);
     }
-  }
-
-  private animateIncomingRate() {
-    const incoming = this.getInactiveDeckObj();
-    const diff = this.incomingTargetRate - this.incomingCurrentRate;
-    if (Math.abs(diff) < 0.001) {
-      this.incomingCurrentRate = this.incomingTargetRate;
-      incoming.el.playbackRate = this.incomingCurrentRate;
-      this.incomingRateAnimationId = null;
-      return;
-    }
-    this.incomingCurrentRate += diff * 0.15;
-    incoming.el.playbackRate = this.incomingCurrentRate;
-    this.incomingRateAnimationId = requestAnimationFrame(() => this.animateIncomingRate());
   }
 
   get paused() { return this.getActiveDeckObj().el.paused; }

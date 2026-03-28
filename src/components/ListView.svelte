@@ -43,13 +43,17 @@
   );
 
   let sources = $derived([...new Set(tracks.map(t => t.source || 'local'))]);
-  let formats = $derived([...new Set(tracks.map(t => t.path.split('.').pop()?.toLowerCase() || ''))].filter(Boolean));
+
+  // Extract format once per track (avoids repeated split('.').pop() in filter + format list)
+  function getFormat(path: string): string {
+    return path.split('.').pop()?.toLowerCase() || '';
+  }
+  let formats = $derived([...new Set(tracks.map(t => getFormat(t.path)))].filter(Boolean));
 
   let displayTracks = $derived(
     filteredTracks.filter(t => {
       if (sourceFilter !== 'all' && (t.source || 'local') !== sourceFilter) return false;
-      const fmt = t.path.split('.').pop()?.toLowerCase() || '';
-      if (formatFilter !== 'all' && fmt !== formatFilter) return false;
+      if (formatFilter !== 'all' && getFormat(t.path) !== formatFilter) return false;
       return true;
     })
   );

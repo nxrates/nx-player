@@ -1,19 +1,36 @@
 <script lang="ts">
   import { audioPlayer } from '../lib/audio';
+  import { invoke } from '@tauri-apps/api/core';
+  import { randomIndex } from '../lib/format';
+  import { getStatus } from '../stores/player.svelte';
 
   let { expanded = false }: { expanded?: boolean } = $props();
 
   let canvas: HTMLCanvasElement | undefined = $state();
   let containerEl: HTMLDivElement | undefined = $state();
-  let visualizer: any = $state(null);
+  let visualizer: any = null;
   let animFrameId: number | null = null;
   let cycleTimer: ReturnType<typeof setInterval> | null = null;
   let presetName = $state('');
   let showPresetName = $state(false);
   let hideTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  const TARGET_FPS = parseInt(localStorage.getItem('nx-viz-fps') || '60');
-  const FRAME_INTERVAL = 1000 / TARGET_FPS;
+  // --- Settings: reactive, re-read from localStorage on each render loop tick ---
+  // Pixel scale: multiplier on CSS container size for the render resolution.
+  // 1.0 = CSS pixels (blurry on retina but fast), 2.0 = retina-quality.
+  // Max render size is capped so going above the display resolution does nothing.
+  const MAX_RENDER_DIM = 1920; // absolute cap — never exceed 1080p equivalent
+
+  function getPixelScale(): number {
+    return parseFloat(localStorage.getItem('nx-viz-scale') || '1');
+  }
+  function getTargetFps(): number {
+    return parseInt(localStorage.getItem('nx-viz-fps') || '60');
+  }
+
+  // Reactive FPS — re-read every time the render loop restarts
+  let targetFps = getTargetFps();
+  let frameInterval = 1000 / targetFps;
   let lastRenderTime = 0;
 
   let presetKeys: string[] = [];
@@ -21,6 +38,21 @@
   let currentIndex = 0;
 
   let noAudio = $state(true);
+
+  // Compute render dimensions from CSS size and pixel scale, capped at MAX_RENDER_DIM
+  function renderSize(cssW: number, cssH: number): [number, number] {
+    const scale = getPixelScale();
+    let w = Math.round(cssW * scale);
+    let h = Math.round(cssH * scale);
+    // Cap to MAX_RENDER_DIM (no point rendering higher than 1080p for a visualizer)
+    if (w > MAX_RENDER_DIM) { h = Math.round(h * MAX_RENDER_DIM / w); w = MAX_RENDER_DIM; }
+    if (h > MAX_RENDER_DIM) { w = Math.round(w * MAX_RENDER_DIM / h); h = MAX_RENDER_DIM; }
+    return [Math.max(1, w), Math.max(1, h)];
+  }
+
+  function setVisualizationActive(active: boolean) {
+    invoke('audio_set_visualization', { active }).catch(() => {});
+  }
 
   $effect(() => {
     if (!canvas) return;
@@ -33,6 +65,7 @@
     }
 
     noAudio = false;
+    audioPlayer.connectAnalyser();
 
     Promise.all([
       import('butterchurn'),
@@ -42,50 +75,71 @@
       presets = presetsMod.default.getPresets();
       presetKeys = Object.keys(presets);
 
+      const [iw, ih] = renderSize(canvas!.clientWidth, canvas!.clientHeight);
+      canvas!.width = iw;
+      canvas!.height = ih;
+
       visualizer = butterchurn.createVisualizer(ctx, canvas!, {
-        width: canvas!.width,
-        height: canvas!.height,
-        pixelRatio: window.devicePixelRatio || 1,
+        width: iw,
+        height: ih,
+        pixelRatio: 1,
         textureRatio: 1,
       });
 
       visualizer.connectAudio(analyser);
 
-      // Load saved preset or random initial preset
       const savedPreset = localStorage.getItem('nx-viz-preset');
       if (savedPreset && presets[savedPreset]) {
         currentIndex = presetKeys.indexOf(savedPreset);
         visualizer.loadPreset(presets[savedPreset], 0);
         presetName = savedPreset;
       } else {
-        currentIndex = Math.floor(Math.random() * presetKeys.length);
+        currentIndex = randomIndex(presetKeys.length);
         visualizer.loadPreset(presets[presetKeys[currentIndex]], 0);
         presetName = presetKeys[currentIndex];
       }
 
-      visualizer.setRendererSize(canvas!.width, canvas!.height);
+      visualizer.setRendererSize(iw, ih);
       startRender();
       startAutoCycle();
+      setVisualizationActive(true);
     });
 
     return () => {
       stopRender();
       stopAutoCycle();
+      setVisualizationActive(false);
+      audioPlayer.disconnectAnalyser();
+      if (visualizer) {
+        try { visualizer.disconnectAudio?.(); } catch {}
+        visualizer = null;
+      }
+      if (canvas) {
+        const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
+        if (gl) {
+          const ext = gl.getExtension('WEBGL_lose_context');
+          if (ext) ext.loseContext();
+        }
+        // Force canvas buffer deallocation
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+      presets = {};
+      presetKeys = [];
     };
   });
 
-  // ResizeObserver for container size changes
+  // ResizeObserver — updates canvas + butterchurn render size
   $effect(() => {
     if (!containerEl || !canvas) return;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const w = Math.floor(entry.contentRect.width);
-        const h = Math.floor(entry.contentRect.height);
-        if (w > 0 && h > 0) {
-          canvas!.width = w * (window.devicePixelRatio || 1);
-          canvas!.height = h * (window.devicePixelRatio || 1);
+        const [pw, ph] = renderSize(entry.contentRect.width, entry.contentRect.height);
+        if (pw > 0 && ph > 0) {
+          canvas!.width = pw;
+          canvas!.height = ph;
           if (visualizer) {
-            visualizer.setRendererSize(w, h);
+            visualizer.setRendererSize(pw, ph);
           }
         }
       }
@@ -94,8 +148,41 @@
     return () => ro.disconnect();
   });
 
+  // Visibility change
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    const handler = () => {
+      if (document.hidden) {
+        stopRender();
+        setVisualizationActive(false);
+      } else if (visualizer) {
+        startRender();
+        setVisualizationActive(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  });
+
+  // Stop rendering when music stops
+  $effect(() => {
+    const playing = getStatus() === 'playing';
+    if (!visualizer) return;
+    if (playing) {
+      startRender();
+      setVisualizationActive(true);
+    } else {
+      stopRender();
+      setVisualizationActive(false);
+    }
+  });
+
   function startRender() {
     if (animFrameId !== null) return;
+    // Re-read FPS setting on each render restart (reactive to settings changes)
+    targetFps = getTargetFps();
+    frameInterval = 1000 / targetFps;
+    lastRenderTime = 0;
     animFrameId = requestAnimationFrame(renderFrame);
   }
 
@@ -107,10 +194,21 @@
   }
 
   function renderFrame(ts: number) {
+    if (ts - lastRenderTime < frameInterval) {
+      animFrameId = requestAnimationFrame(renderFrame);
+      return;
+    }
+    // Compute elapsed time in seconds for butterchurn (frame-rate independent timing)
+    const elapsed = lastRenderTime > 0 ? (ts - lastRenderTime) / 1000 : 1 / targetFps;
+    lastRenderTime = ts - ((ts - lastRenderTime) % frameInterval);
+
+    if (visualizer) {
+      // Pass elapsedTime so butterchurn's internal time advances by real wall-clock delta,
+      // not by 1/measured_fps. This ensures preset animation speed is identical
+      // regardless of the FPS cap (15fps and 120fps look the same speed).
+      visualizer.render({ elapsedTime: elapsed });
+    }
     animFrameId = requestAnimationFrame(renderFrame);
-    if (ts - lastRenderTime < FRAME_INTERVAL) return;
-    lastRenderTime = ts - ((ts - lastRenderTime) % FRAME_INTERVAL);
-    if (visualizer) visualizer.render();
   }
 
   function startAutoCycle() {
@@ -135,13 +233,6 @@
     showPresetName = true;
     if (hideTimeout) clearTimeout(hideTimeout);
     hideTimeout = setTimeout(() => { showPresetName = false; }, 3000);
-  }
-
-  if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) stopRender();
-      else if (visualizer) startRender();
-    });
   }
 </script>
 

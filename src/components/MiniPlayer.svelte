@@ -76,7 +76,7 @@
   .progress-fill {
     height: 100%;
     background: var(--accent);
-    transition: width 250ms linear;
+    will-change: width;
   }
 
   .content {

@@ -1,9 +1,14 @@
 import type { Track } from '../lib/types';
 import { audioPlayer } from '../lib/audio';
 import { getCoverPath, getWaveform, fetchCoverArt } from '../lib/ipc';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { randomIndex } from '../lib/format';
 
 type RepeatMode = 'off' | 'all' | 'one';
+
+/** Build a stream:// URL for audio playback (custom protocol with Cache-Control: no-store). */
+function streamUrl(filePath: string): string {
+  return 'stream://localhost/' + encodeURIComponent(filePath);
+}
 
 let status = $state<'stopped' | 'playing' | 'paused'>('stopped');
 let currentTrack = $state<Track | null>(null);
@@ -26,7 +31,7 @@ let outgoingTrack = $state<Track | null>(null);
 let outgoingCoverUrl = $state<string | null>(null);
 let outgoingPosition = $state(0);
 let outgoingDuration = $state(0);
-let crossfadeIntervalId: ReturnType<typeof setInterval> | null = null;
+let crossfadeRafId: number | null = null;
 
 // Apply initial volume
 audioPlayer.setVolume(volume);
@@ -96,7 +101,7 @@ export async function playTrack(track: Track, trackList?: Track[]) {
   if (track.has_cover) {
     try {
       const path = await getCoverPath(track.id);
-      if (path) coverUrl = convertFileSrc(path);
+      if (path) coverUrl = streamUrl(path);
     } catch { /* no cover */ }
   }
 
@@ -104,12 +109,12 @@ export async function playTrack(track: Track, trackList?: Track[]) {
   if (!coverUrl && track.artist && track.title) {
     try {
       const fetchedPath = await fetchCoverArt(track.id, track.artist, track.title);
-      if (fetchedPath) coverUrl = convertFileSrc(fetchedPath);
+      if (fetchedPath) coverUrl = streamUrl(fetchedPath);
     } catch { /* no cover found online either */ }
   }
 
   try {
-    const src = convertFileSrc(track.path);
+    const src = streamUrl(track.path);
     await audioPlayer.play(src, {
       title: track.title,
       artist: track.artist,
@@ -126,22 +131,24 @@ export async function playTrack(track: Track, trackList?: Track[]) {
 }
 
 async function preProcessNextTracks() {
+  const promises: Promise<unknown>[] = [];
   for (let offset = 1; offset <= 2; offset++) {
     const idx = queueIndex + offset;
     if (idx < queue.length) {
       const t = queue[idx];
       if (t && !t.bpm) {
-        try { await getWaveform(t.id); } catch {}
+        promises.push(getWaveform(t.id).catch(() => {}));
       }
     }
   }
+  await Promise.all(promises);
 }
 
 export function playPause() {
   // If no track is loaded, pick a random one from the queue and play it
   if (!currentTrack) {
     if (queue.length > 0) {
-      const idx = Math.floor(Math.random() * queue.length);
+      const idx = randomIndex(queue.length);
       queueIndex = idx;
       playTrack(queue[idx]);
     }
@@ -175,13 +182,13 @@ export function selectRandom(trackList?: Track[]) {
     queue = [...trackList];
   }
   if (queue.length === 0) return;
-  const idx = Math.floor(Math.random() * queue.length);
+  const idx = randomIndex(queue.length);
   queueIndex = idx;
   currentTrack = queue[idx];
   // Load cover
   if (queue[idx].has_cover) {
     getCoverPath(queue[idx].id).then(path => {
-      if (path) coverUrl = convertFileSrc(path);
+      if (path) coverUrl = streamUrl(path);
     }).catch(() => {});
   } else {
     coverUrl = null;
@@ -190,14 +197,31 @@ export function selectRandom(trackList?: Track[]) {
 
 // --- Auto-mix ---
 
+// Cached settings — avoids localStorage reads on every timeupdate (~4/sec)
+let cachedAutomix = localStorage.getItem('ls-automix') === 'true';
+let cachedCrossfade = localStorage.getItem('ls-crossfade') === 'true';
+let cachedCrossfadeDur = parseFloat(localStorage.getItem('ls-crossfade-dur') ?? '8');
+let cachedMatchBpm = localStorage.getItem('ls-match-bpm') === 'true';
+
+// Refresh cached settings periodically (every 2 seconds) instead of on every timeupdate
+let lastSettingsRefresh = 0;
+function refreshAutoMixSettings() {
+  const now = Date.now();
+  if (now - lastSettingsRefresh < 2000) return;
+  lastSettingsRefresh = now;
+  cachedAutomix = localStorage.getItem('ls-automix') === 'true';
+  cachedCrossfade = localStorage.getItem('ls-crossfade') === 'true';
+  cachedCrossfadeDur = parseFloat(localStorage.getItem('ls-crossfade-dur') ?? '8');
+  cachedMatchBpm = localStorage.getItem('ls-match-bpm') === 'true';
+}
+
 function checkAutoMix(currentTime: number) {
   if (isCrossfading || status !== 'playing' || duration <= 0) return;
 
-  const automixOn = localStorage.getItem('ls-automix') === 'true';
-  const crossfadeOn = localStorage.getItem('ls-crossfade') === 'true';
-  if (!automixOn || !crossfadeOn) return;
+  refreshAutoMixSettings();
+  if (!cachedAutomix || !cachedCrossfade) return;
 
-  const crossfadeDur = parseFloat(localStorage.getItem('ls-crossfade-dur') ?? '8');
+  const crossfadeDur = cachedCrossfadeDur;
   const mixPoint = duration - crossfadeDur;
 
   // Don't trigger for very short tracks
@@ -214,13 +238,13 @@ async function startAutoMix(crossfadeDur: number) {
 
   // Push current index to history before advancing
   if (queueIndex >= 0) {
-    playHistory = [...playHistory, queueIndex];
+    playHistory = [...playHistory.slice(-99), queueIndex];
   }
 
   // Determine next track index
   let nextIndex = queueIndex + 1;
   if (shuffle) {
-    nextIndex = Math.floor(Math.random() * queue.length);
+    nextIndex = randomIndex(queue.length);
   }
   if (nextIndex >= queue.length) {
     if (repeat === 'all') {
@@ -241,8 +265,7 @@ async function startAutoMix(crossfadeDur: number) {
   }
 
   // BPM matching: adjust next track's speed to match current track's BPM
-  const matchBpm = localStorage.getItem('ls-match-bpm') === 'true';
-  if (matchBpm && currentTrack?.bpm && nextTrack.bpm) {
+  if (cachedMatchBpm && currentTrack?.bpm && nextTrack.bpm) {
     const ratio = currentTrack.bpm / nextTrack.bpm; // slow down if next is faster, speed up if slower
     if (ratio >= 0.85 && ratio <= 1.15) {
       audioPlayer.setIncomingPlaybackRate(playbackRate * ratio);
@@ -254,7 +277,7 @@ async function startAutoMix(crossfadeDur: number) {
   if (nextTrack.has_cover) {
     try {
       const path = await getCoverPath(nextTrack.id);
-      if (path) nextCoverUrl = convertFileSrc(path);
+      if (path) nextCoverUrl = streamUrl(path);
     } catch { /* no cover */ }
   }
 
@@ -265,7 +288,7 @@ async function startAutoMix(crossfadeDur: number) {
   outgoingDuration = duration;
   crossfadeProgress = 0;
 
-  const nextSrc = convertFileSrc(nextTrack.path);
+  const nextSrc = streamUrl(nextTrack.path);
   try {
     await audioPlayer.startCrossfade(nextSrc, crossfadeDur * 1000, {
       title: nextTrack.title,
@@ -281,7 +304,7 @@ async function startAutoMix(crossfadeDur: number) {
     position = 0;
 
     // Reset playback rate on the now-active deck if we adjusted it
-    if (matchBpm) {
+    if (cachedMatchBpm) {
       audioPlayer.setPlaybackRate(playbackRate);
     }
   } catch (e) {
@@ -293,12 +316,25 @@ async function startAutoMix(crossfadeDur: number) {
     return;
   }
 
-  // Animate crossfade progress and track positions
+  // Animate crossfade progress using rAF throttled to 15fps
+  // (smooth enough for a progress bar, 4x fewer reactive state mutations)
+  const CF_INTERVAL = 1000 / 15;
+  let lastCfUpdate = 0;
   const startTime = Date.now();
-  if (crossfadeIntervalId) clearInterval(crossfadeIntervalId);
-  crossfadeIntervalId = setInterval(() => {
-    const elapsed = (Date.now() - startTime) / (crossfadeDur * 1000);
-    crossfadeProgress = Math.min(1, elapsed);
+  const totalMs = crossfadeDur * 1000;
+  if (crossfadeRafId !== null) cancelAnimationFrame(crossfadeRafId);
+  crossfadeRafId = null;
+
+  function updateCrossfade(ts?: number) {
+    const now = ts ?? performance.now();
+    if (now - lastCfUpdate < CF_INTERVAL) {
+      crossfadeRafId = requestAnimationFrame(updateCrossfade);
+      return;
+    }
+    lastCfUpdate = now;
+
+    const elapsed = Date.now() - startTime;
+    crossfadeProgress = Math.min(1, elapsed / totalMs);
     // Update incoming (current) track position from the audio player
     if (audioPlayer.isCrossfading) {
       position = audioPlayer.incomingTime;
@@ -306,13 +342,15 @@ async function startAutoMix(crossfadeDur: number) {
       if (inDur && !isNaN(inDur)) duration = inDur;
     }
     if (crossfadeProgress >= 1) {
-      clearInterval(crossfadeIntervalId!);
-      crossfadeIntervalId = null;
+      crossfadeRafId = null;
       outgoingTrack = null;
       outgoingCoverUrl = null;
       crossfadeProgress = 0;
+    } else {
+      crossfadeRafId = requestAnimationFrame(updateCrossfade);
     }
-  }, 250);
+  }
+  crossfadeRafId = requestAnimationFrame(updateCrossfade);
 
 }
 
@@ -325,11 +363,11 @@ export function next() {
   }
   // Push current index to history before advancing
   if (queueIndex >= 0) {
-    playHistory = [...playHistory, queueIndex];
+    playHistory = [...playHistory.slice(-99), queueIndex];
   }
   let nextIndex = queueIndex + 1;
   if (shuffle) {
-    nextIndex = Math.floor(Math.random() * queue.length);
+    nextIndex = randomIndex(queue.length);
   }
   if (nextIndex >= queue.length) {
     if (repeat === 'all') {
@@ -357,9 +395,9 @@ export function prev() {
     outgoingCoverUrl = null;
     crossfadeProgress = 0;
     isCrossfading = false;
-    if (crossfadeIntervalId) {
-      clearInterval(crossfadeIntervalId);
-      crossfadeIntervalId = null;
+    if (crossfadeRafId !== null) {
+      cancelAnimationFrame(crossfadeRafId);
+      crossfadeRafId = null;
     }
     status = 'playing';
     return;

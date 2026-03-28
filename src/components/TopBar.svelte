@@ -7,10 +7,12 @@
     onToggleQueue,
     onToggleLibrary,
     onToggleSettings,
+    onToggleFullscreen,
   }: {
     onToggleQueue?: () => void;
     onToggleLibrary?: () => void;
     onToggleSettings?: () => void;
+    onToggleFullscreen?: () => void;
   } = $props();
 
   let volumeOpen = $state(false);
@@ -28,7 +30,7 @@
   <div class="traffic-lights">
     <button class="tl tl-close" onclick={() => getCurrentWindow().close()} title="Close"></button>
     <button class="tl tl-minimize" onclick={() => getCurrentWindow().minimize()} title="Minimize"></button>
-    <button class="tl tl-maximize" disabled title="Maximize"></button>
+    <button class="tl tl-maximize" onclick={onToggleFullscreen} title="Fullscreen"></button>
   </div>
 
   <!-- Logo + title -->
@@ -98,11 +100,12 @@
     height: 40px;
     display: flex;
     align-items: center;
-    background: var(--bg);
+    background: transparent;
     flex-shrink: 0;
     padding: 0 10px;
     z-index: 100;
     gap: 6px;
+    position: relative;
   }
 
   .traffic-lights {
@@ -110,7 +113,6 @@
     align-items: center;
     gap: 7px;
     padding-right: 4px;
-    -webkit-app-region: no-drag;
   }
 
   .tl {
@@ -155,7 +157,6 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    -webkit-app-region: no-drag;
   }
 
   .icon-btn {
@@ -186,10 +187,6 @@
     position: relative;
     display: flex;
     align-items: center;
-  }
-  .volume-popover,
-  .volume-popover * {
-    -webkit-app-region: no-drag;
   }
   .volume-popover {
     position: absolute;

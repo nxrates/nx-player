@@ -47,6 +47,13 @@
     return () => document.removeEventListener('toggle-mini-mode', handler);
   });
 
+  // Listen for fullscreen toggle from TopBar green button
+  $effect(() => {
+    const handler = () => toggleFullscreen();
+    document.addEventListener('toggle-fullscreen', handler);
+    return () => document.removeEventListener('toggle-fullscreen', handler);
+  });
+
   // MilkDrop expanded controls auto-hide
   function resetControlsTimer() {
     controlsHidden = false;
@@ -83,14 +90,15 @@
       controlsHidden = false;
       if (controlsTimeout) clearTimeout(controlsTimeout);
     } else {
-      milkdropExpanded = true;
+      // Await fullscreen BEFORE setting expanded state to avoid resize race condition
       await win.setFullscreen(true);
       isFullscreen = true;
+      milkdropExpanded = true;
       resetControlsTimer();
     }
   }
 
-  // Escape key exits fullscreen
+  // Escape key exits fullscreen + cleanup timeout on unmount
   $effect(() => {
     const handler = async (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isFullscreen) {
@@ -104,7 +112,10 @@
       }
     };
     document.addEventListener('keydown', handler, true);
-    return () => document.removeEventListener('keydown', handler, true);
+    return () => {
+      document.removeEventListener('keydown', handler, true);
+      if (controlsTimeout) { clearTimeout(controlsTimeout); controlsTimeout = null; }
+    };
   });
 
   // Outgoing track waveform data
@@ -166,7 +177,6 @@
         <MilkDrop expanded={milkdropExpanded} />
       {:else}
         {#if coverUrl}
-          <div class="art-blur" style="background-image: url({coverUrl})"></div>
           <img src={coverUrl} alt="Album art" class="full-art" />
         {:else}
           <div class="art-placeholder">
@@ -179,85 +189,65 @@
       {/if}
     </div>
 
-    <!-- Mode bar (floating top-right) -->
-    <div class="mode-bar">
-      <button class="mode-btn" class:active={viewMode === 'normal'} onclick={() => setViewMode('normal')} title="Album Art">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="3" width="18" height="18" rx="2"/>
-          <circle cx="8.5" cy="8.5" r="1.5"/>
-          <path d="m21 15-5-5L5 21"/>
+    <!-- BPM tag: floating top-left, aligned with art-pill -->
+    {#if track?.bpm}
+      <div class="bpm-tag">{Math.round(track.bpm)} BPM</div>
+    {/if}
+
+    <!-- Floating vertical pill: heart + view toggle (top-right) -->
+    <div class="art-pill">
+      <button class="pill-btn" class:liked onclick={() => liked = !liked} title="Like">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill={liked ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
         </svg>
       </button>
-      <button class="mode-btn" class:active={viewMode === 'milkdrop'} onclick={() => setViewMode('milkdrop')} title="MilkDrop Visualizer">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>
-        </svg>
-      </button>
-      <button class="mode-btn" onclick={() => setViewMode('mini')} title="Mini Mode (M)">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M4 14h6v6H4z"/>
-          <path d="M14 4h6v6h-6z"/>
-        </svg>
-      </button>
-      {#if viewMode === 'milkdrop'}
-        <button class="mode-btn" onclick={toggleFullscreen} title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}>
+      {#if viewMode === 'normal'}
+        <button class="pill-btn" onclick={() => setViewMode('milkdrop')} title="Visualizer">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            {#if isFullscreen}
-              <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
-            {:else}
-              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-            {/if}
+            <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>
+          </svg>
+        </button>
+      {:else}
+        <button class="pill-btn" onclick={() => setViewMode('normal')} title="Album Art">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <path d="m21 15-5-5L5 21"/>
           </svg>
         </button>
       {/if}
     </div>
 
+
   {/if}
 
   <!-- Controls overlay (glass effect in normal/milkdrop, solid in mini) -->
   <div class="controls-overlay" class:glass={viewMode !== 'mini'}>
-    <!-- Crossfade: outgoing track (fading out — RED tint, same layout as current) -->
-    {#if outgoingTrack}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="cf-track cf-out" style="opacity: {Math.max(0.1, 1 - cfProgress)}" onclick={handleOutgoingClick}>
-        <Waveform overrideTrackId={outgoingTrack.id} overridePosition={ogPos} overrideDuration={ogDur} tint="red" />
-        <div class="track-info">
-          <div class="info-left">
-            <span class="track-title">{outgoingTrack.title}</span>
-            <span class="track-artist">{outgoingTrack.artist || 'Unknown'}</span>
+    <!-- Waveform: top element of the overlay, forms its ragged upper boundary -->
+    {#if viewMode !== 'mini'}
+      <div class="waveform-edge">
+        {#if outgoingTrack}
+          <div class="cf-waveform" style="opacity: {Math.max(0.1, 1 - cfProgress)}">
+            <Waveform overrideTrackId={outgoingTrack.id} overridePosition={ogPos} overrideDuration={ogDur} tint="red" beatGrid={outgoingTrack.beat_grid} downbeats={outgoingTrack.downbeats} />
           </div>
-          {#if outgoingTrack.bpm}
-            <span class="bpm-badge">{Math.round(outgoingTrack.bpm)} BPM</span>
-          {/if}
+        {/if}
+        <div class="cf-waveform" style="opacity: {outgoingTrack ? Math.max(0.3, cfProgress) : 1}">
+          <Waveform tint={undefined} beatGrid={track?.beat_grid} downbeats={track?.downbeats} title={track?.title} artist={track?.artist} bpm={track?.bpm} showOverlay={!outgoingTrack} />
         </div>
       </div>
     {/if}
 
-    <!-- Current track (fading in — GREEN tint during crossfade, normal otherwise) -->
-    <div class="cf-track cf-in" style="opacity: {outgoingTrack ? Math.max(0.3, cfProgress) : 1}">
-      <Waveform tint={outgoingTrack ? 'green' : undefined} />
-      <div class="track-info">
-        <div class="info-left">
-          {#if viewMode === 'mini'}
+    <!-- Mini mode: inline waveform + track info (only shown in mini) -->
+    {#if viewMode === 'mini'}
+      <div class="cf-track cf-in">
+        <Waveform tint={undefined} beatGrid={track?.beat_grid} downbeats={track?.downbeats} />
+        <div class="track-info">
+          <div class="info-left">
             <span class="track-title">{track?.title || 'No Track'}{track?.artist ? ' \u2014 ' + track.artist : ''}</span>
-          {:else}
-            <span class="track-title">{track?.title || 'No Track'}</span>
-            <span class="track-artist">{track?.artist || 'Unknown Artist'}</span>
-          {/if}
-        </div>
-        <div class="info-badges">
-          <button class="badge-btn" class:liked onclick={() => liked = !liked}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill={liked ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
-            </svg>
-          </button>
-          {#if track?.bpm}
-            <span class="bpm-badge">{Math.round(track.bpm)} BPM</span>
-          {/if}
+          </div>
         </div>
       </div>
-    </div>
+    {/if}
 
     <!-- Transport -->
     <div class="transport">
@@ -335,6 +325,15 @@
     flex: 1;
     position: relative;
     overflow: hidden;
+    z-index: 1;
+  }
+
+  .now-playing.fullscreen {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 100;
   }
 
   .now-playing.mini-mode {
@@ -351,8 +350,14 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Reserve space for glass controls overlay */
-    padding-bottom: 130px;
+    /* Reserve space so album art isn't hidden behind controls */
+    padding-bottom: calc(48px + clamp(48px, 14vh, 110px));
+  }
+
+  /* Fullscreen/expanded: minimal padding for MilkDrop */
+  .fullscreen .content-fill,
+  .milkdrop-expanded .content-fill {
+    padding-bottom: calc(48px + clamp(48px, 14vh, 110px));
   }
 
   .full-art {
@@ -367,8 +372,8 @@
     inset: 0;
     background-size: cover;
     background-position: center;
-    filter: blur(60px) saturate(1.8);
-    opacity: 0.3;
+    filter: blur(80px) saturate(1.5);
+    opacity: 0.35;
     transform: scale(1.5);
     pointer-events: none;
     z-index: -1;
@@ -388,7 +393,7 @@
   .controls-overlay {
     position: relative;
     z-index: 5;
-    padding: 4px 0 4px;
+    padding: 0 0 4px;
   }
 
   .controls-overlay.glass {
@@ -396,10 +401,24 @@
     bottom: 0;
     left: 0;
     right: 0;
-    background: var(--glass-bg);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
-    border-top: 1px solid var(--border);
+    /* Transparent — the global art-blur tint shows through from app-root */
+    background: transparent;
+  }
+
+  /* Waveform edge: first child inside the overlay, fills available space above transport */
+  .waveform-edge {
+    width: 100%;
+    height: clamp(48px, 14vh, 110px);
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .cf-waveform {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    display: flex;
+    transition: opacity 300ms ease;
   }
 
   .mini-mode .controls-overlay {
@@ -418,46 +437,74 @@
     pointer-events: none;
   }
 
-  /* --- Mode bar (floating top-right) --- */
-  .mode-bar {
+  /* --- BPM tag: floating top-left --- */
+  .bpm-tag {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    top: 12px;
+    left: 12px;
+    z-index: 10;
+    font-size: clamp(10px, 1.4vw, 13px);
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.75);
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 4px 12px;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+  .fullscreen .bpm-tag,
+  .milkdrop-expanded .bpm-tag {
+    transition: opacity 300ms ease;
+  }
+  .fullscreen.controls-hidden-mode .bpm-tag,
+  .milkdrop-expanded.controls-hidden-mode .bpm-tag {
+    opacity: 0;
+  }
+
+  /* --- Floating vertical pill (top-right): heart + view toggle --- */
+  .art-pill {
+    position: absolute;
+    top: 12px;
+    right: 12px;
     z-index: 10;
     display: flex;
+    flex-direction: column;
     gap: 2px;
-    background: var(--glass-bg);
-    backdrop-filter: blur(8px);
-    border-radius: 8px;
-    padding: 3px;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-radius: 14px;
+    padding: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
   }
-  .mode-btn {
+  .pill-btn {
     width: 28px;
     height: 28px;
-    border-radius: 6px;
+    border-radius: 7px;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--text-secondary);
+    color: rgba(255, 255, 255, 0.75);
     transition: all 150ms;
     cursor: pointer;
   }
-  .mode-btn:hover { color: var(--text-primary); }
+  .pill-btn:hover { color: #fff; }
+  .pill-btn.liked { color: var(--accent); }
 
-  /* Auto-hide mode bar in fullscreen */
-  .fullscreen .mode-bar,
-  .milkdrop-expanded .mode-bar {
+  /* Auto-hide pill in fullscreen/expanded */
+  .fullscreen .art-pill,
+  .milkdrop-expanded .art-pill {
     transition: opacity 300ms ease;
   }
-  .fullscreen.controls-hidden-mode .mode-bar,
-  .milkdrop-expanded.controls-hidden-mode .mode-bar {
+  .fullscreen.controls-hidden-mode .art-pill,
+  .milkdrop-expanded.controls-hidden-mode .art-pill {
     opacity: 0;
     pointer-events: none;
   }
-  .mode-btn.active {
-    background: var(--bg-surface);
-    color: white;
-  }
+
 
   /* --- Mini mode expand button --- */
   .mini-expand-btn {

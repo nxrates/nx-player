@@ -16,6 +16,7 @@
   let track = $derived(getCurrentTrack());
 
   let vizFps = $state(parseInt(localStorage.getItem('nx-viz-fps') || '60'));
+  let vizScale = $state(parseFloat(localStorage.getItem('nx-viz-scale') || '1'));
   let vizCycleInterval = $state(parseInt(localStorage.getItem('nx-viz-cycle') || '20'));
   let showPresetList = $state(false);
   let presetList = $state<string[]>([]);
@@ -24,6 +25,11 @@
   function setVizFps(f: number) {
     vizFps = f;
     localStorage.setItem('nx-viz-fps', String(f));
+  }
+
+  function setVizScale(s: number) {
+    vizScale = s;
+    localStorage.setItem('nx-viz-scale', String(s));
   }
 
   function setVizCycleInterval(val: number) {
@@ -56,8 +62,13 @@
   }
 
   let extensions = $state<Extension[]>([]);
+  let extensionsLoaded = false;
 
-  $effect(() => { loadExts(); });
+  $effect(() => {
+    if (extensionsLoaded) return;
+    extensionsLoaded = true;
+    loadExts();
+  });
 
   async function loadExts() {
     try { extensions = await listExtensions(); } catch {}
@@ -201,13 +212,33 @@
 
     <!-- Visualizer -->
     <div class="section-header">Visualizer</div>
-    <div class="row">
-      <span class="row-label">Frame Rate</span>
-      <div class="segmented">
-        {#each [30, 60, 90] as f}
-          <button class:active={vizFps === f} onclick={() => setVizFps(f)}>{f}</button>
-        {/each}
+    <div class="row column">
+      <div class="slider-header">
+        <span class="row-label">Frame Rate: {vizFps} fps</span>
       </div>
+      <input
+        type="range"
+        class="slider"
+        min="15"
+        max="120"
+        step="5"
+        value={vizFps}
+        oninput={(e) => setVizFps(parseInt((e.target as HTMLInputElement).value))}
+      />
+    </div>
+    <div class="row column">
+      <div class="slider-header">
+        <span class="row-label">Pixel Scale: {vizScale.toFixed(1)}x</span>
+      </div>
+      <input
+        type="range"
+        class="slider"
+        min="0.5"
+        max="2"
+        step="0.25"
+        value={vizScale}
+        oninput={(e) => setVizScale(parseFloat((e.target as HTMLInputElement).value))}
+      />
     </div>
     <div class="row column">
       <div class="slider-header">
@@ -323,10 +354,6 @@
 </div>
 
 <style>
-  .settings,
-  .settings * {
-    -webkit-app-region: no-drag;
-  }
   .settings {
     flex: 1;
     display: flex;

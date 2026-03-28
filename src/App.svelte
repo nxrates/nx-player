@@ -8,14 +8,20 @@
   import {
     playPause, next, prev, seek, playTrack,
     getPosition, getDuration, getQueue, removeFromQueue, clearQueue,
-    getCurrentTrack, selectRandom,
+    getCurrentTrack, selectRandom, getCoverUrl,
   } from './stores/player.svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import type { Track } from './lib/types';
 
   let activeView = $state<'nowplaying' | 'library' | 'queue' | 'settings'>('nowplaying');
+  let globalCoverUrl = $derived(getCoverUrl());
 
+  // Run once on mount — not reactive (no reactive deps read inside)
+  let initialized = false;
   $effect(() => {
+    if (initialized) return;
+    initialized = true;
+
     loadTracks();
     loadFolders();
     initScanListener();
@@ -95,10 +101,16 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="app-root">
+  <!-- Global album art tint: covers the entire app from header to bottom -->
+  {#if globalCoverUrl}
+    <div class="global-blur" style="background-image: url({globalCoverUrl})"></div>
+  {/if}
+
   <TopBar
     onToggleQueue={() => { activeView = activeView === 'queue' ? 'nowplaying' : 'queue'; }}
     onToggleLibrary={() => { activeView = activeView === 'library' ? 'nowplaying' : 'library'; if (activeView === 'library') loadTracks(); }}
     onToggleSettings={() => { activeView = activeView === 'settings' ? 'nowplaying' : 'settings'; }}
+    onToggleFullscreen={() => document.dispatchEvent(new CustomEvent('toggle-fullscreen'))}
   />
 
   {#if activeView === 'nowplaying'}
@@ -139,6 +151,19 @@
     color: var(--text-primary);
     border-radius: 12px;
     overflow: hidden;
+    position: relative;
+  }
+
+  /* Global album art tint — covers the ENTIRE app window */
+  .global-blur {
+    position: absolute;
+    inset: -40px;
+    background-size: cover;
+    background-position: center;
+    filter: blur(80px) saturate(1.5);
+    opacity: 0.35;
+    pointer-events: none;
+    z-index: 0;
   }
 
   :global(:fullscreen) .app-root,

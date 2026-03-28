@@ -18,5 +18,14 @@ export default defineConfig({
   },
   build: {
     outDir: "build",
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          if (id.includes('butterchurn')) return 'viz';
+          if (id.includes('@tauri-apps')) return 'tauri';
+        },
+      },
+    },
   },
 });
