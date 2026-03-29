@@ -354,10 +354,10 @@
     padding-bottom: calc(48px + clamp(48px, 14vh, 110px));
   }
 
-  /* Fullscreen/expanded: minimal padding for MilkDrop */
+  /* Fullscreen/expanded: MilkDrop goes edge-to-edge, controls overlay on top */
   .fullscreen .content-fill,
   .milkdrop-expanded .content-fill {
-    padding-bottom: calc(48px + clamp(48px, 14vh, 110px));
+    padding-bottom: 0;
   }
 
   .full-art {
@@ -426,13 +426,19 @@
     background: var(--bg);
   }
 
-  /* MilkDrop expanded / fullscreen: auto-hide controls */
+  /* MilkDrop expanded / fullscreen: overlay controls and auto-hide with slide */
   .milkdrop-expanded .controls-overlay,
   .fullscreen .controls-overlay {
-    transition: opacity 300ms ease;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 110;
+    transition: transform 300ms ease, opacity 300ms ease;
   }
   .milkdrop-expanded.controls-hidden-mode .controls-overlay,
   .fullscreen.controls-hidden-mode .controls-overlay {
+    transform: translateY(100%);
     opacity: 0;
     pointer-events: none;
   }
