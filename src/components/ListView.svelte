@@ -28,6 +28,12 @@
   let searchQuery = $state('');
   let sourceFilter = $state<string>('all');
   let formatFilter = $state<string>('all');
+  let searchInput: HTMLInputElement | undefined = $state();
+
+  export function focusSearch() {
+    searchInput?.focus();
+    searchInput?.select();
+  }
 
   let currentTrack = $derived(getCurrentTrack());
   let status = $derived(getStatus());
@@ -70,6 +76,7 @@
   {#if showSearch}
     <div class="search-wrap">
       <input
+        bind:this={searchInput}
         type="text"
         class="search-input"
         placeholder="Search..."

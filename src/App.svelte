@@ -11,10 +11,12 @@
     getCurrentTrack, selectRandom, getCoverUrl,
   } from './stores/player.svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { listen } from '@tauri-apps/api/event';
   import type { Track } from './lib/types';
 
   let activeView = $state<'nowplaying' | 'library' | 'queue' | 'settings'>('nowplaying');
   let globalCoverUrl = $derived(getCoverUrl());
+  let listViewRef: ListView | undefined = $state();
 
   // Run once on mount — not reactive (no reactive deps read inside)
   let initialized = false;
@@ -25,6 +27,12 @@
     loadTracks();
     loadFolders();
     initScanListener();
+
+    // Listen for tray menu actions (next/prev)
+    listen<string>('tray-action', (event) => {
+      if (event.payload === 'next') next();
+      else if (event.payload === 'prev') prev();
+    });
 
     // Restore window size based on saved view mode
     const mode = localStorage.getItem('nx-view-mode');
@@ -87,6 +95,16 @@
       const pos = getPosition();
       const dur = getDuration();
       seek(Math.min(dur, pos + 10));
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      activeView = 'library';
+      loadTracks();
+      setTimeout(() => listViewRef?.focusSearch(), 0);
+    } else if (e.key === '/' && !isInput) {
+      e.preventDefault();
+      activeView = 'library';
+      loadTracks();
+      setTimeout(() => listViewRef?.focusSearch(), 0);
     } else if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
       e.preventDefault();
       activeView = activeView === 'library' ? 'nowplaying' : 'library';
@@ -117,6 +135,7 @@
     <NowPlaying />
   {:else if activeView === 'library'}
     <ListView
+      bind:this={listViewRef}
       tracks={getTracks()}
       title="Library"
       showSearch
