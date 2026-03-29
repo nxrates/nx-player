@@ -70,7 +70,7 @@ pub async fn fetch_cover(
     let artwork_url = best?
         .artwork_url100
         .as_ref()?
-        .replace("100x100bb", "600x600bb");
+        .replace("100x100bb", "1024x1024bb");
 
     // Download the image
     let img_bytes = client
@@ -84,7 +84,7 @@ pub async fn fetch_cover(
 
     match image::load_from_memory(&img_bytes) {
         Ok(img) => {
-            let full = img.resize(600, 600, image::imageops::FilterType::Lanczos3);
+            let full = img.resize(1024, 1024, image::imageops::FilterType::Lanczos3);
             let thumb = img.resize(256, 256, image::imageops::FilterType::Lanczos3);
             save_jpeg(&full, &full_dest, 85);
             save_jpeg(&thumb, &thumb_dest, 75);

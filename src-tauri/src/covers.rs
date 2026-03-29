@@ -46,7 +46,7 @@ pub fn extract_cover(track_path: &Path, track_id: &str, covers_dir: &Path) -> bo
     match ImageReader::new(Cursor::new(data)).with_guessed_format() {
         Ok(reader) => match reader.decode() {
             Ok(img) => {
-                let full = img.resize(600, 600, FilterType::Lanczos3);
+                let full = img.resize(1024, 1024, FilterType::Lanczos3);
                 let thumb = img.resize(256, 256, FilterType::Lanczos3);
                 let ok_full = save_jpeg(&full, &full_path, 85);
                 let ok_thumb = save_jpeg(&thumb, &thumb_path, 75);
