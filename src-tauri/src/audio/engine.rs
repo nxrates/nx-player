@@ -348,15 +348,22 @@ fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<Pla
                         if state.crossfade_position >= 1.0 {
                             state.crossfade_position = 1.0;
                             state.crossfade_active = false;
-                            // Crossfade complete: deck B becomes the new primary
-                            // Swap A <- B, clear B
-                            state.deck_a = state.deck_b.take();
-                            state.consumer_a = state.consumer_b.take();
-                            state.eq_crossfader = None;
-                            state.stretcher = None;
-                            state.beat_sync = None;
                         }
                     }
+                }
+
+                // Deferred deck swap: only after the frame batch is done and no
+                // consumers are mid-read, to avoid racing with read_stereo_frame.
+                if !state.crossfade_active
+                    && state.crossfade_position >= 1.0
+                    && state.deck_b.is_some()
+                {
+                    state.deck_a = state.deck_b.take();
+                    state.consumer_a = state.consumer_b.take();
+                    state.eq_crossfader = None;
+                    state.stretcher = None;
+                    state.beat_sync = None;
+                    state.crossfade_position = 0.0;
                 }
             }
         }
@@ -450,7 +457,10 @@ static HANN_WINDOW: LazyLock<[f32; 256]> = LazyLock::new(|| {
 
 /// Compute a 128-bin magnitude spectrum from 256 real samples into a pre-allocated array.
 fn compute_spectrum_256_into(samples: &[f32], out: &mut [f32; 128]) {
-    assert!(samples.len() >= 256);
+    if samples.len() < 256 {
+        out.fill(0.0);
+        return;
+    }
 
     let hann = &*HANN_WINDOW;
     let tw_re = &*TWIDDLE_RE;

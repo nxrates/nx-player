@@ -320,7 +320,7 @@ async function startAutoMix(crossfadeDur: number) {
   // (smooth enough for a progress bar, 4x fewer reactive state mutations)
   const CF_INTERVAL = 1000 / 15;
   let lastCfUpdate = 0;
-  const startTime = Date.now();
+  const startTime = performance.now();
   const totalMs = crossfadeDur * 1000;
   if (crossfadeRafId !== null) cancelAnimationFrame(crossfadeRafId);
   crossfadeRafId = null;
@@ -333,7 +333,7 @@ async function startAutoMix(crossfadeDur: number) {
     }
     lastCfUpdate = now;
 
-    const elapsed = Date.now() - startTime;
+    const elapsed = now - startTime;
     crossfadeProgress = Math.min(1, elapsed / totalMs);
     // Update incoming (current) track position from the audio player
     if (audioPlayer.isCrossfading) {

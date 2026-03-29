@@ -13,7 +13,9 @@ use commands::audio::{AudioEngineState, PlaybackReceiver};
 use covers::CoversDir;
 use db::DbState;
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 
 #[cfg(target_os = "macos")]
 fn apply_macos_window_tweaks(app: &tauri::App) {
@@ -118,6 +120,14 @@ fn handle_stream_request(request: &http::Request<Vec<u8>>) -> http::Response<Vec
             .unwrap();
     };
     let len = meta.len();
+    if len == 0 {
+        return http::Response::builder()
+            .status(200)
+            .header("Content-Length", 0)
+            .header("Cache-Control", "no-store")
+            .body(Vec::new())
+            .unwrap();
+    }
 
     // Guess MIME type from extension
     let mime = match std::path::Path::new(path)
@@ -248,6 +258,78 @@ pub fn run() {
             // Manage state
             app.manage(DbState(Mutex::new(conn)));
             app.manage(CoversDir(covers_dir.clone()));
+
+            // --- System tray menu for headless mode ---
+            let play_pause = MenuItemBuilder::with_id("play-pause", "Play / Pause").build(app)?;
+            let next_item = MenuItemBuilder::with_id("next", "Next Track").build(app)?;
+            let prev_item = MenuItemBuilder::with_id("prev", "Previous Track").build(app)?;
+            let show_window = MenuItemBuilder::with_id("show-window", "Show Window").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "Quit NX Player").build(app)?;
+
+            let tray_menu = MenuBuilder::new(app)
+                .item(&play_pause)
+                .item(&next_item)
+                .item(&prev_item)
+                .separator()
+                .item(&show_window)
+                .separator()
+                .item(&quit)
+                .build()?;
+
+            let _tray = TrayIconBuilder::new()
+                .menu(&tray_menu)
+                .on_menu_event(move |app, event| {
+                    match event.id().as_ref() {
+                        "play-pause" => {
+                            if let Some(engine) = app.try_state::<AudioEngineState>() {
+                                // Toggle: try Play, it's idempotent if already playing
+                                let _ = engine.0.lock().map(|e| {
+                                    let _ = e.send(audio::engine::EngineCommand::Play);
+                                });
+                            }
+                        }
+                        "next" | "prev" => {
+                            // Emit event to frontend which manages queue state
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.emit(
+                                    "tray-action",
+                                    event.id().as_ref(),
+                                );
+                            }
+                        }
+                        "show-window" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, button_state: tauri::tray::MouseButtonState::Up, .. } = event {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // Intercept window close: hide instead of quit (headless mode)
+            if let Some(window) = app.get_webview_window("main") {
+                let win = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = win.hide();
+                    }
+                });
+            }
 
             // Auto-scan on startup if there are any folders to scan
             if !folders.is_empty() {

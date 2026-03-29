@@ -92,6 +92,10 @@ impl Deck {
 impl Drop for Deck {
     fn drop(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
+        if let Some(thread) = self._thread.take() {
+            // Give the decode thread a moment to notice the stop flag and exit cleanly.
+            let _ = thread.join();
+        }
     }
 }
 
