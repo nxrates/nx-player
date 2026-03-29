@@ -28,7 +28,7 @@
 <div class="topbar" data-tauri-drag-region>
   <!-- macOS traffic lights -->
   <div class="traffic-lights">
-    <button class="tl tl-close" onclick={() => getCurrentWindow().close()} title="Close"></button>
+    <button class="tl tl-close" onclick={() => getCurrentWindow().hide()} title="Close"></button>
     <button class="tl tl-minimize" onclick={() => getCurrentWindow().minimize()} title="Minimize"></button>
     <button class="tl tl-maximize" onclick={onToggleFullscreen} title="Fullscreen"></button>
   </div>

@@ -29,6 +29,10 @@
     "core:window:allow-maximize",
     "core:window:allow-center",
     "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible",
     "core:window:allow-start-dragging"
   ]
 }
