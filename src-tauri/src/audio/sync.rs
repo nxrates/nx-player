@@ -28,16 +28,26 @@ impl BeatSync {
         }
     }
 
-    /// Find the nearest value in a sorted slice to the given target.
+    /// Find the nearest value in a sorted slice using binary search.
     fn find_nearest(times: &[f64], target: f64) -> Option<f64> {
-        if times.is_empty() { return None; }
-        let mut best = times[0];
-        let mut best_dist = (target - best).abs();
-        for &t in &times[1..] {
-            let dist = (target - t).abs();
-            if dist < best_dist { best = t; best_dist = dist; }
+        if times.is_empty() {
+            return None;
         }
-        Some(best)
+        let idx = times.partition_point(|&t| t < target);
+        let candidates = [
+            if idx > 0 { Some(times[idx - 1]) } else { None },
+            if idx < times.len() { Some(times[idx]) } else { None },
+        ];
+        candidates
+            .iter()
+            .flatten()
+            .copied()
+            .min_by(|a, b| {
+                (a - target)
+                    .abs()
+                    .partial_cmp(&(b - target).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     }
 
     /// Find the nearest beat in the grid to the given time position (seconds).
@@ -51,9 +61,10 @@ impl BeatSync {
     }
 
     /// Find the next downbeat after the given time position.
-    /// Useful for snapping crossfade start to bar boundaries.
+    /// Uses binary search for O(log n) performance.
     pub fn next_downbeat_after(grid: &BeatGrid, time: f64) -> Option<f64> {
-        grid.downbeats.iter().find(|&&db| db > time).copied()
+        let idx = grid.downbeats.partition_point(|&db| db <= time);
+        grid.downbeats.get(idx).copied()
     }
 
     /// Compute the crossfade snap point: the next bar boundary after `time` on deck A.
@@ -62,6 +73,22 @@ impl BeatSync {
             Self::next_downbeat_after(a, time).unwrap_or(time)
         } else {
             time
+        }
+    }
+
+    /// Distance from `time` to the nearest beat, as a fraction of the beat interval.
+    /// Returns 0.0 when exactly on beat, 0.5 when maximally off beat.
+    pub fn beat_phase(grid: &BeatGrid, time: f64) -> f64 {
+        if grid.bpm <= 0.0 {
+            return 0.0;
+        }
+        let beat_interval = 60.0 / grid.bpm;
+        match Self::nearest_beat(grid, time) {
+            Some(nearest) => {
+                let offset = (time - nearest).abs();
+                (offset / beat_interval).min(0.5)
+            }
+            None => 0.0,
         }
     }
 }

@@ -348,37 +348,86 @@ fn detect_downbeats_with_time_sig(
     if beats.is_empty() {
         return Ok(Vec::new());
     }
-    
+
     if bpm_estimate <= 0.0 {
         return Err(AnalysisError::InvalidInput(
             format!("Invalid BPM for downbeat detection: {:.2}", bpm_estimate)
         ));
     }
-    
-    let beats_per_bar = time_sig.beats_per_bar() as f32;
+
+    let beats_per_bar = time_sig.beats_per_bar() as usize;
     let beat_interval = 60.0 / bpm_estimate;
-    let bar_interval = beat_interval * beats_per_bar;
-    
-    // Tolerance for downbeat detection: ±10% of bar interval
+    let bar_interval = beat_interval * beats_per_bar as f32;
+
+    if beats.len() < beats_per_bar {
+        // Not enough beats for a full bar — just use first beat as downbeat
+        return Ok(vec![beats[0]]);
+    }
+
+    // Phase search: try each possible phase offset (0..beats_per_bar) and score
+    // how well the resulting downbeat grid aligns with strong beats.
+    // "Strong" = beats that have more onsets nearby or fall on natural bar boundaries.
+    let mut best_phase = 0;
+    let mut best_score = f32::NEG_INFINITY;
+
+    for phase in 0..beats_per_bar.min(beats.len()) {
+        let mut score: f32 = 0.0;
+        let mut idx = phase;
+        let mut count = 0;
+
+        while idx < beats.len() {
+            let downbeat_time = beats[idx];
+
+            // Score: how many neighboring beats fall at the expected positions
+            // relative to this downbeat (i.e., are beat 2, 3, 4 present?)
+            let mut bar_score: f32 = 1.0; // base score for the downbeat itself
+            for b in 1..beats_per_bar {
+                let expected = downbeat_time + beat_interval * b as f32;
+                // Check if any beat is close to expected position
+                let tolerance = beat_interval * 0.15;
+                let found = beats.iter().any(|&bt| (bt - expected).abs() <= tolerance);
+                if found {
+                    bar_score += 1.0;
+                }
+            }
+            score += bar_score;
+            count += 1;
+            idx += beats_per_bar;
+        }
+
+        // Normalize by number of bars to avoid favoring phases with more bars
+        let normalized = if count > 0 { score / count as f32 } else { 0.0 };
+        if normalized > best_score {
+            best_score = normalized;
+            best_phase = phase;
+        }
+    }
+
+    // Generate downbeats using best phase
     let tolerance = bar_interval * 0.1;
-    
     let mut downbeats = Vec::new();
-    
-    // First beat is always a downbeat
-    downbeats.push(beats[0]);
-    
-    // For each subsequent beat, check if it's approximately one bar away from last downbeat
-    for &beat_time in &beats[1..] {
+
+    // Start from the best phase offset
+    if best_phase < beats.len() {
+        downbeats.push(beats[best_phase]);
+    }
+
+    // Walk forward from the initial downbeat, snapping to nearest beats at bar intervals
+    for &beat_time in &beats[(best_phase + 1)..] {
         let last_downbeat = downbeats[downbeats.len() - 1];
-        let expected_next_downbeat = last_downbeat + bar_interval;
-        let distance = (beat_time - expected_next_downbeat).abs();
-        
-        // If this beat is close to expected downbeat time, mark it as downbeat
+        let expected_next = last_downbeat + bar_interval;
+        let distance = (beat_time - expected_next).abs();
+
         if distance <= tolerance {
             downbeats.push(beat_time);
         }
     }
-    
+
+    log::debug!(
+        "Downbeat phase search: best_phase={}, score={:.2}, downbeats={}",
+        best_phase, best_score, downbeats.len()
+    );
+
     Ok(downbeats)
 }
 
