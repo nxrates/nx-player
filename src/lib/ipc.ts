@@ -5,8 +5,8 @@ export async function getTracks(sortBy: string, sortOrder: string, search?: stri
   return invoke('get_tracks', { sortBy, sortOrder, search: search ?? null });
 }
 
-export async function getCoverPath(trackId: string): Promise<string | null> {
-  return invoke('get_cover_path', { trackId });
+export async function getCoverPath(trackId: string, size: 'full' | 'thumb' = 'full'): Promise<string | null> {
+  return invoke('get_cover_path', { trackId, size });
 }
 
 export async function addFolder(path: string): Promise<void> {

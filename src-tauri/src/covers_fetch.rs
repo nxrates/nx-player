@@ -18,19 +18,20 @@ struct ItunesResult {
     artwork_url100: Option<String>,
 }
 
-/// Search iTunes for cover art, download and save it.
-/// Returns the path to the saved cover if successful.
+/// Search iTunes for cover art, download and save both full (600px) and thumb (256px).
+/// Returns the path to the full-size cover if successful.
 pub async fn fetch_cover(
     artist: &str,
     title: &str,
     track_id: &str,
     covers_dir: &Path,
 ) -> Option<PathBuf> {
-    let dest = covers_dir.join(format!("{}.jpg", track_id));
+    let full_dest = covers_dir.join(format!("{}_full.jpg", track_id));
+    let thumb_dest = covers_dir.join(format!("{}_thumb.jpg", track_id));
 
     // Already cached
-    if dest.exists() {
-        return Some(dest);
+    if full_dest.exists() && thumb_dest.exists() {
+        return Some(full_dest);
     }
 
     let client = reqwest::Client::builder()
@@ -69,7 +70,7 @@ pub async fn fetch_cover(
     let artwork_url = best?
         .artwork_url100
         .as_ref()?
-        .replace("100x100bb", "600x600bb"); // Upgrade resolution
+        .replace("100x100bb", "600x600bb");
 
     // Download the image
     let img_bytes = client
@@ -81,21 +82,30 @@ pub async fn fetch_cover(
         .await
         .ok()?;
 
-    // Optimize: resize to 400x400 max and re-encode as JPEG quality 80
-    // This typically produces 20-40KB files instead of 50-100KB raw
     match image::load_from_memory(&img_bytes) {
         Ok(img) => {
-            let resized = img.resize(400, 400, image::imageops::FilterType::Lanczos3);
-            let mut buf = std::io::BufWriter::new(std::fs::File::create(&dest).ok()?);
-            resized
-                .write_to(&mut buf, image::ImageFormat::Jpeg)
-                .ok()?;
+            let full = img.resize(600, 600, image::imageops::FilterType::Lanczos3);
+            let thumb = img.resize(256, 256, image::imageops::FilterType::Lanczos3);
+            save_jpeg(&full, &full_dest, 85);
+            save_jpeg(&thumb, &thumb_dest, 75);
         }
         Err(_) => {
-            // Fallback: save raw bytes if image processing fails
-            std::fs::write(&dest, &img_bytes).ok()?;
+            // Fallback: save raw bytes as full
+            std::fs::write(&full_dest, &img_bytes).ok()?;
         }
     }
 
-    Some(dest)
+    Some(full_dest)
+}
+
+fn save_jpeg(img: &image::DynamicImage, path: &Path, quality: u8) -> bool {
+    let file = match std::fs::File::create(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+        std::io::BufWriter::new(file),
+        quality,
+    );
+    encoder.encode_image(img).is_ok()
 }

@@ -93,9 +93,11 @@ pub fn get_tracks_by_artist(
 #[tauri::command]
 pub fn get_cover_path(
     track_id: String,
+    size: Option<String>,
     covers_dir: State<'_, CoversDir>,
 ) -> Result<Option<String>, String> {
-    Ok(crate::covers::get_cover_path(&track_id, &covers_dir.0))
+    let sz = size.as_deref().unwrap_or("full");
+    Ok(crate::covers::get_cover_path(&track_id, &covers_dir.0, sz))
 }
 
 #[tauri::command]

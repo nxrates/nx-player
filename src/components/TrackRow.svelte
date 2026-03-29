@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
+  import { getCoverPath } from '../lib/ipc';
 
   let { track, isPlaying = false, showRemove = false, onclick, onRemove }: {
     track: Track;
@@ -9,16 +10,38 @@
     onclick?: () => void;
     onRemove?: () => void;
   } = $props();
+
+  let coverThumb = $state<string | null>(null);
+  let lastTrackId = $state<string | null>(null);
+
+  $effect(() => {
+    if (track.id === lastTrackId) return;
+    lastTrackId = track.id;
+    coverThumb = null;
+    if (track.has_cover) {
+      getCoverPath(track.id, 'thumb')
+        .then(path => {
+          if (path && track.id === lastTrackId) {
+            coverThumb = 'stream://localhost/' + encodeURIComponent(path);
+          }
+        })
+        .catch(() => {});
+    }
+  });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="track-row" class:active={isPlaying} onclick={onclick} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') onclick?.(); }}>
-  <div class="art-placeholder">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M9 18V5l12-2v13"/>
-      <circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
-    </svg>
-  </div>
+  {#if coverThumb}
+    <img src={coverThumb} alt="" class="cover-thumb" />
+  {:else}
+    <div class="art-placeholder">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 18V5l12-2v13"/>
+        <circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+      </svg>
+    </div>
+  {/if}
   <div class="info">
     <span class="title">{track.title || 'Unknown'}</span>
     <span class="artist">{track.artist || 'Unknown Artist'}</span>
@@ -56,6 +79,14 @@
   .track-row.active {
     border-left: 3px solid var(--accent);
     padding-left: 17px;
+  }
+
+  .cover-thumb {
+    width: 40px;
+    height: 40px;
+    border-radius: 4px;
+    object-fit: cover;
+    flex-shrink: 0;
   }
 
   .art-placeholder {
