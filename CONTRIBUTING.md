@@ -15,7 +15,7 @@ Thank you for your interest in contributing to NX Player.
 
 ```bash
 git clone <repo-url>
-cd lightseek
+cd nx-player
 pnpm install
 pnpm tauri dev
 ```

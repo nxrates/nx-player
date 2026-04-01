@@ -2218,38 +2218,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightseek"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "cpal",
- "dirs",
- "ebur128",
- "http",
- "image",
- "lofty",
- "objc2",
- "percent-encoding",
- "raw-window-handle",
- "rayon",
- "reqwest 0.12.28",
- "rtrb",
- "rubato",
- "rusqlite",
- "serde",
- "serde_json",
- "ssstretch",
- "stratum-dsp",
- "symphonia",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "uuid",
- "walkdir",
-]
-
-[[package]]
 name = "link-cplusplus"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2603,6 +2571,38 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "nx-player"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "cpal",
+ "dirs",
+ "ebur128",
+ "http",
+ "image",
+ "lofty",
+ "objc2",
+ "percent-encoding",
+ "raw-window-handle",
+ "rayon",
+ "reqwest 0.12.28",
+ "rtrb",
+ "rubato",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "ssstretch",
+ "stratum-dsp",
+ "symphonia",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]
@@ -4523,6 +4523,7 @@ dependencies = [
  "gtk",
  "heck 0.5.0",
  "http",
+ "image",
  "jni",
  "libc",
  "log",
