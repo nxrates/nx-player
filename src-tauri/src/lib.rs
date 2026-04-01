@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
+use tauri::image::Image;
 
 #[cfg(target_os = "macos")]
 fn apply_macos_window_tweaks(app: &tauri::App) {
@@ -204,10 +205,13 @@ pub fn run() {
         // Custom streaming protocol: serves audio with Cache-Control: no-store
         // so WKWebView doesn't cache every played file in memory forever.
         .register_asynchronous_uri_scheme_protocol("stream", |_ctx, request, responder| {
-            std::thread::spawn(move || {
-                let resp = handle_stream_request(&request);
-                responder.respond(resp);
-            });
+            // Respond inline without spawning a thread. WebKit calls this on the main
+            // thread via WKURLSchemeHandler. Spawning a thread and calling respond() later
+            // races with WebKit cancelling the task (on seek / track-change), which fires
+            // an uncatchable ObjC exception → abort. Responding here immediately is safe:
+            // file I/O on NVMe SSD is <100µs for our 512 KB cap, well within frame budget.
+            let resp = handle_stream_request(&request);
+            responder.respond(resp);
         })
         .setup(|app| {
             // Apply macOS window tweaks (hide traffic lights, ensure shadow)
@@ -219,13 +223,28 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data directory");
+
+            // Migrate data from the old "com.lightseek.app" directory if it exists
+            if !app_data_dir.exists() {
+                if let Some(parent) = app_data_dir.parent() {
+                    let old_dir = parent.join("com.lightseek.app");
+                    if old_dir.exists() {
+                        let _ = std::fs::rename(&old_dir, &app_data_dir);
+                    }
+                }
+            }
+
             std::fs::create_dir_all(&app_data_dir).expect("Failed to create app data directory");
 
             let covers_dir = app_data_dir.join("covers");
             std::fs::create_dir_all(&covers_dir).expect("Failed to create covers directory");
 
-            // Initialize database
-            let db_path = app_data_dir.join("lightseek.db");
+            // Migrate old database filename
+            let old_db = app_data_dir.join("lightseek.db");
+            let db_path = app_data_dir.join("nx-player.db");
+            if old_db.exists() && !db_path.exists() {
+                let _ = std::fs::rename(&old_db, &db_path);
+            }
             let conn =
                 db::initialize(&db_path).expect("Failed to initialize database");
 
@@ -276,20 +295,27 @@ pub fn run() {
                 .item(&quit)
                 .build()?;
 
+            // Load tray icon (embedded at compile time so it works in release bundles).
+            // Use full-resolution PNG — macOS handles downscaling for crisp results.
+            let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))
+                .map_err(|e| format!("Failed to decode tray icon: {}", e))?;
+
             let _tray = TrayIconBuilder::new()
+                .icon(icon)
+                .icon_as_template(true)
+                .tooltip("NX Player")
                 .menu(&tray_menu)
+                .show_menu_on_left_click(true)
                 .on_menu_event(move |app, event| {
                     match event.id().as_ref() {
                         "play-pause" => {
                             if let Some(engine) = app.try_state::<AudioEngineState>() {
-                                // Toggle: try Play, it's idempotent if already playing
                                 let _ = engine.0.lock().map(|e| {
                                     let _ = e.send(audio::engine::EngineCommand::Play);
                                 });
                             }
                         }
                         "next" | "prev" => {
-                            // Emit event to frontend which manages queue state
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.emit(
                                     "tray-action",
@@ -307,15 +333,6 @@ pub fn run() {
                             app.exit(0);
                         }
                         _ => {}
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, button_state: tauri::tray::MouseButtonState::Up, .. } = event {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
                     }
                 })
                 .build(app)?;
@@ -340,7 +357,7 @@ pub fn run() {
                         .path()
                         .app_data_dir()
                         .expect("Failed to get app data dir")
-                        .join("lightseek.db");
+                        .join("nx-player.db");
                     match db::initialize(&db_path_clone) {
                         Ok(conn) => {
                             let conn_mutex = Mutex::new(conn);
