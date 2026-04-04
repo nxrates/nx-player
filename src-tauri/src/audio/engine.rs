@@ -221,9 +221,20 @@ fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<Pla
                     state.consumer_b = None;
                     state.crossfade_active = false;
                 }
-                EngineCommand::Seek(_pos) => {
-                    // Seek is complex with streaming decode; for now, reload would be needed.
-                    // TODO: implement seek by restarting decode at offset
+                EngineCommand::Seek(pos) => {
+                    // Seek by reloading the active deck at the target position.
+                    // pos is a fraction [0..1] of the track duration.
+                    if let Some(ref deck) = state.deck_a {
+                        let path = deck.path.clone();
+                        deck.stop();
+                        match Deck::load_at(path, state.output_sr, Some(pos)) {
+                            Ok((new_deck, new_consumer)) => {
+                                state.deck_a = Some(new_deck);
+                                state.consumer_a = Some(new_consumer);
+                            }
+                            Err(e) => eprintln!("Seek failed: {}", e),
+                        }
+                    }
                 }
                 EngineCommand::SetVolume(vol) => {
                     state
@@ -383,11 +394,10 @@ fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<Pla
                 None => (0.0, 0.0),
             };
 
-            // Only include spectrum data when visualization is active (no alloc when off)
             let spectrum = if state.visualization_active {
                 state.spectrum.to_vec()
             } else {
-                Default::default()
+                Vec::new()
             };
 
             let _ = state_tx.send(PlaybackState {

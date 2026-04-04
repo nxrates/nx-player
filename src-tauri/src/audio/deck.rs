@@ -5,10 +5,12 @@ use std::sync::Arc;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
+use symphonia::core::formats::SeekMode;
 use symphonia::core::probe::Hint;
+use symphonia::core::units::Time;
 
 /// Ring buffer capacity in samples (stereo interleaved).
 const RING_BUFFER_CAPACITY: usize = 192_000; // ~1 second at 96kHz stereo
@@ -20,6 +22,8 @@ pub struct Deck {
     pub position: Arc<AtomicU64>,
     /// Duration of the loaded track in samples (at output sample rate).
     pub duration_samples: u64,
+    /// Path to the loaded file (retained for seek-by-reload).
+    pub path: PathBuf,
     /// Decode thread handle.
     _thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -27,7 +31,13 @@ pub struct Deck {
 impl Deck {
     /// Load a file and begin decoding in the background.
     /// Returns a Consumer<f32> of interleaved stereo samples resampled to `output_sr`.
+    /// If `seek_to` is Some, seek to that fractional position [0..1] before decoding.
     pub fn load(path: PathBuf, output_sr: u32) -> Result<(Self, rtrb::Consumer<f32>), String> {
+        Self::load_at(path, output_sr, None)
+    }
+
+    /// Load a file, optionally seeking to a position (0.0 = start, 1.0 = end).
+    pub fn load_at(path: PathBuf, output_sr: u32, seek_to: Option<f64>) -> Result<(Self, rtrb::Consumer<f32>), String> {
         let (mut producer, consumer) = rtrb::RingBuffer::new(RING_BUFFER_CAPACITY);
 
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -35,7 +45,7 @@ impl Deck {
         let position = Arc::new(AtomicU64::new(0));
         let pos = position.clone();
 
-        // Probe file to get duration and sample rate before spawning thread
+        // Probe file once — reuse the format reader in the decode thread
         let file = std::fs::File::open(&path)
             .map_err(|e| format!("Failed to open file: {}", e))?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -51,16 +61,22 @@ impl Deck {
             .ok_or_else(|| "No default track found".to_string())?;
         let track_sr = track.codec_params.sample_rate
             .ok_or_else(|| "Unknown sample rate".to_string())?;
+        let track_id = track.id;
+        let codec_params = track.codec_params.clone();
 
-        let n_frames = track.codec_params.n_frames.unwrap_or(0);
+        let n_frames = codec_params.n_frames.unwrap_or(0);
         let duration_samples = if track_sr == output_sr {
             n_frames
         } else {
             (n_frames as f64 * output_sr as f64 / track_sr as f64) as u64
         };
 
+        // Pass the already-probed format reader to the decode thread (no re-probe)
+        let format = probed.format;
+        let seek_pos = seek_to;
+        let dur_secs = duration_samples as f64 / output_sr as f64;
         let thread = std::thread::spawn(move || {
-            if let Err(e) = decode_loop(&path, output_sr, &mut producer, &stop, &pos) {
+            if let Err(e) = decode_loop(format, track_id, &codec_params, track_sr, output_sr, seek_pos, dur_secs, &mut producer, &stop, &pos) {
                 eprintln!("Deck decode error: {}", e);
             }
         });
@@ -70,6 +86,7 @@ impl Deck {
                 stop_flag,
                 position,
                 duration_samples,
+                path,
                 _thread: Some(thread),
             },
             consumer,
@@ -100,34 +117,34 @@ impl Drop for Deck {
 }
 
 fn decode_loop(
-    path: &PathBuf,
+    mut format: Box<dyn FormatReader>,
+    track_id: u32,
+    codec_params: &symphonia::core::codecs::CodecParameters,
+    track_sr: u32,
     output_sr: u32,
+    seek_to: Option<f64>,
+    duration_secs: f64,
     producer: &mut rtrb::Producer<f32>,
     stop: &AtomicBool,
     position: &AtomicU64,
 ) -> Result<(), String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("Failed to open file: {}", e))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|e| format!("Failed to probe: {}", e))?;
-
-    let mut format = probed.format;
-    let track = format.default_track()
-        .ok_or_else(|| "No default track".to_string())?;
-    let track_id = track.id;
-    let track_sr = track.codec_params.sample_rate
-        .ok_or_else(|| "Unknown sample rate".to_string())?;
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make(codec_params, &DecoderOptions::default())
         .map_err(|e| format!("Failed to create decoder: {}", e))?;
+
+    // Seek to target position if requested
+    if let Some(frac) = seek_to {
+        let target_secs = (frac.clamp(0.0, 1.0) * duration_secs).max(0.0);
+        let seek_time = Time::from(target_secs);
+        if let Err(e) = format.seek(SeekMode::Coarse, symphonia::core::formats::SeekTo::Time { time: seek_time, track_id: Some(track_id) }) {
+            eprintln!("Seek failed (will play from start): {}", e);
+        } else {
+            // Update position to reflect the seek
+            let seeked_samples = (target_secs * output_sr as f64) as u64;
+            position.store(seeked_samples, Ordering::Relaxed);
+        }
+        decoder.reset();
+    }
 
     // Set up resampler if needed
     let needs_resample = track_sr != output_sr;
