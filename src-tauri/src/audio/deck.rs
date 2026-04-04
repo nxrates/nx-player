@@ -166,6 +166,7 @@ fn decode_loop(
 
     // Buffers for resampling (per-channel, non-interleaved) — pre-reserve capacity
     let mut resample_in: Vec<Vec<f32>> = vec![Vec::with_capacity(chunk_size * 2); 2];
+    let mut resample_chunk: Vec<Vec<f32>> = vec![vec![0.0f32; chunk_size]; 2];
     let mut out_pos: u64 = 0;
     let backoff_sleep = std::time::Duration::from_millis(5); // 5ms backoff reduces idle wakeups 5x vs 1ms
 
@@ -220,13 +221,13 @@ fn decode_loop(
 
             // Process full chunks
             while resample_in[0].len() >= chunk_size {
-                let chunk: Vec<Vec<f32>> = resample_in
-                    .iter_mut()
-                    .map(|buf| buf.drain(..chunk_size).collect())
-                    .collect();
+                for ch in 0..2 {
+                    resample_chunk[ch].clear();
+                    resample_chunk[ch].extend(resample_in[ch].drain(..chunk_size));
+                }
 
                 if let Some(ref mut rs) = resampler {
-                    match rs.process(&chunk, None) {
+                    match rs.process(&resample_chunk, None) {
                         Ok(output) => {
                             let out_frames = output[0].len();
                             for f in 0..out_frames {

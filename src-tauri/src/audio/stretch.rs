@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 /// Real-time time stretcher wrapping ssstretch.
 pub struct TimeStretcher {
     stretcher: ssstretch::Stretch,
@@ -9,6 +10,7 @@ pub struct TimeStretcher {
     result_buf: Vec<f32>,
 }
 
+#[allow(dead_code)]
 impl TimeStretcher {
     pub fn new(channels: usize, sample_rate: u32) -> Self {
         let mut stretcher = ssstretch::Stretch::new();

@@ -27,11 +27,13 @@ pub enum EngineCommand {
         deck_b_beats: Option<BeatGrid>,
     },
     CancelCrossfade,
+    SetEqBand { band: usize, gain_db: f32 },
+    ResetEq,
     SetVisualization(bool),
     Shutdown,
 }
 
-/// Playback state sent from engine thread to UI at ~30Hz.
+/// Playback state sent from engine thread to UI at ~60Hz.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PlaybackState {
     pub playing: bool,
@@ -106,6 +108,7 @@ struct EngineState {
     crossfade_position: f32,
     crossfade_step: f32, // per-frame increment
     eq_crossfader: Option<EqCrossfader>,
+    peq: Option<super::peq::ParametricEQ>,
     stretcher: Option<TimeStretcher>,
     beat_sync: Option<BeatSync>,
     // Visualization — only computed when visualization_active is true
@@ -116,7 +119,7 @@ struct EngineState {
 
 fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<PlaybackState>) {
     // Create output ring buffer
-    let (output_producer, output_consumer) = rtrb::RingBuffer::new(192_000);
+    let (output_producer, output_consumer) = rtrb::RingBuffer::new(384_000);
 
     let (output, output_sr) = match AudioOutput::new(output_consumer) {
         Ok((o, sr)) => (Some(o), sr),
@@ -141,6 +144,7 @@ fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<Pla
         crossfade_position: 0.0,
         crossfade_step: 0.0,
         eq_crossfader: None,
+        peq: Some(super::peq::ParametricEQ::new(output_sr as f32)),
         stretcher: None,
         beat_sync: None,
         visualization_active: false,
@@ -149,14 +153,14 @@ fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<Pla
     };
 
     let mut last_state_time = std::time::Instant::now();
-    let state_interval = std::time::Duration::from_millis(33); // ~30Hz
+    let state_interval = std::time::Duration::from_millis(16); // ~60Hz
 
     // Pre-computed constants for adaptive sleep (avoid re-creating Duration objects)
     let sleep_idle = std::time::Duration::from_millis(50);
     let sleep_healthy = std::time::Duration::from_millis(5);
     let sleep_hungry = std::time::Duration::from_millis(1);
     let sleep_no_output = std::time::Duration::from_millis(10);
-    let buffer_threshold = 192_000 / 2;
+    let buffer_threshold = 384_000 / 2;
 
     loop {
         // When idle: block on command channel instead of spinning (saves a full CPU core).
@@ -281,6 +285,16 @@ fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<Pla
                     state.stretcher = None;
                     state.beat_sync = None;
                 }
+                EngineCommand::SetEqBand { band, gain_db } => {
+                    if let Some(ref mut peq) = state.peq {
+                        peq.set_band(band, gain_db);
+                    }
+                }
+                EngineCommand::ResetEq => {
+                    if let Some(ref mut peq) = state.peq {
+                        peq.reset_gains();
+                    }
+                }
                 EngineCommand::SetVisualization(active) => {
                     state.visualization_active = active;
                     if !active {
@@ -340,6 +354,12 @@ fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<Pla
                         mix_stereo(a_l, a_r, b_l, b_r, 0.0, cached_a_gain, cached_b_gain, cached_master)
                     };
 
+                    let (left, right) = if let Some(ref mut peq) = state.peq {
+                        peq.process(left, right)
+                    } else {
+                        (left, right)
+                    };
+
                     let _ = producer.push(left);
                     let _ = producer.push(right);
 
@@ -379,7 +399,7 @@ fn engine_loop(cmd_rx: mpsc::Receiver<EngineCommand>, state_tx: mpsc::Sender<Pla
             }
         }
 
-        // Send playback state at ~30Hz (skip when idle — nothing changes)
+        // Send playback state at ~60Hz (skip when idle — nothing changes)
         let now = std::time::Instant::now();
         if (state.playing || state.crossfade_active)
             && now.duration_since(last_state_time) >= state_interval

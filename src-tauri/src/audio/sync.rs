@@ -1,4 +1,5 @@
 /// Beat grid information for sync calculations.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BeatGrid {
     pub bpm: f64,
@@ -12,6 +13,7 @@ pub struct BeatSync {
     pub deck_b: Option<BeatGrid>,
 }
 
+#[allow(dead_code)]
 impl BeatSync {
     pub fn new() -> Self {
         Self {
