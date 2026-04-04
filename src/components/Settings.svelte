@@ -3,6 +3,7 @@
   import { getFolders, loadFolders, startScan, getScanStatus, getScanProgress } from '../stores/library.svelte';
   import { getPlaybackRate, setPlaybackRate, getCurrentTrack } from '../stores/player.svelte';
   import { addFolder, listExtensions, installExtension, uninstallExtension, startExtension, stopExtension } from '../lib/ipc';
+  import Equalizer from './Equalizer.svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import type { Extension } from '../lib/types';
 
@@ -209,6 +210,10 @@
         oninput={(e) => setPlaybackRate(parseFloat((e.target as HTMLInputElement).value))}
       />
     </div>
+
+    <!-- Equalizer -->
+    <div class="section-header">Equalizer</div>
+    <Equalizer />
 
     <!-- Visualizer -->
     <div class="section-header">Visualizer</div>

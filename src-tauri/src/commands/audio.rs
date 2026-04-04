@@ -96,6 +96,16 @@ pub fn audio_set_visualization(engine: tauri::State<'_, AudioEngineState>, activ
 }
 
 #[tauri::command]
+pub fn audio_set_eq_band(engine: tauri::State<'_, AudioEngineState>, band: usize, gain_db: f32) -> Result<(), String> {
+    send_cmd(&engine, EngineCommand::SetEqBand { band, gain_db: gain_db.clamp(-12.0, 12.0) })
+}
+
+#[tauri::command]
+pub fn audio_reset_eq(engine: tauri::State<'_, AudioEngineState>) -> Result<(), String> {
+    send_cmd(&engine, EngineCommand::ResetEq)
+}
+
+#[tauri::command]
 pub fn audio_get_state(receiver: tauri::State<'_, PlaybackReceiver>) -> Result<Option<PlaybackState>, String> {
     let rx = receiver.0.acquire()?;
     let mut latest: Option<PlaybackState> = None;

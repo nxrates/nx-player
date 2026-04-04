@@ -417,6 +417,8 @@ pub fn run() {
             commands::audio::audio_start_crossfade,
             commands::audio::audio_cancel_crossfade,
             commands::audio::audio_set_visualization,
+            commands::audio::audio_set_eq_band,
+            commands::audio::audio_reset_eq,
             commands::audio::audio_get_state,
         ])
         .run(tauri::generate_context!())

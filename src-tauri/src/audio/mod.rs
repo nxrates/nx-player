@@ -3,6 +3,7 @@ pub mod deck;
 pub mod engine;
 pub mod eq;
 pub mod mixer;
+pub mod peq;
 pub mod output;
 pub mod stretch;
 pub mod sync;
