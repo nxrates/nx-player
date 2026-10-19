@@ -180,6 +180,14 @@ class StretchWorkletProcessor extends AudioWorkletProcessor {
     var rightOut = output.length > 1 ? output[1] : output[0];
     var frames = leftIn.length; // Always 128 (render quantum)
 
+    // Passthrough when no pitch shift active (transpose ≈ 1.0).
+    // Avoids STFT latency and processing overhead.
+    if (Math.abs(this._transposeFactor - 1.0) < 0.001) {
+      leftOut.set(leftIn);
+      rightOut.set(rightIn);
+      return true;
+    }
+
     // --- Copy planar input into WASM interleaved buffer ---
     // No allocations: we write directly into the pre-cached Float32Array view.
     var inView = this._inputView;
