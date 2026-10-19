@@ -34,11 +34,11 @@ export class AudioPlayer {
     this.deckA = { el: new Audio(), src: null, gain: null, st: null };
     this.deckB = { el: new Audio(), src: null, gain: null, st: null };
 
-    // CRITICAL: preservesPitch = false because SoundTouch handles pitch preservation.
-    // If true, the browser applies its own WSOLA on top of SoundTouch → double processing → artifacts.
+    // Browser handles pitch correction for speed changes natively (preservesPitch=true).
+    // The WASM StretchNode is only used for independent pitch shifting (semitone adjustment).
     for (const deck of [this.deckA, this.deckB]) {
-      deck.el.preservesPitch = false;
-      (deck.el as any).webkitPreservesPitch = false;
+      deck.el.preservesPitch = true;
+      (deck.el as any).webkitPreservesPitch = true;
     }
 
     // Wire events to active deck
@@ -76,11 +76,7 @@ export class AudioPlayer {
           await StretchNode.register(this.ctx);
           this.stretchRegistered = true;
         } catch (e) {
-          console.warn('Signalsmith Stretch WASM registration failed, falling back to native:', e);
-          for (const deck of [this.deckA, this.deckB]) {
-            deck.el.preservesPitch = true;
-            (deck.el as any).webkitPreservesPitch = true;
-          }
+          console.warn('Signalsmith Stretch WASM registration failed:', e);
         }
       }
 
@@ -156,6 +152,9 @@ export class AudioPlayer {
     deck.gain!.gain.setValueAtTime(1, this.ctx!.currentTime);
     await deck.el.play();
 
+    // Re-apply stored playback rate (new source resets to 1.0)
+    deck.el.playbackRate = this.targetRate;
+
     // MediaSession
     if ('mediaSession' in navigator && metadata) {
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -181,14 +180,7 @@ export class AudioPlayer {
     incoming.gain!.gain.cancelScheduledValues(0);
     incoming.gain!.gain.setValueAtTime(0, this.ctx!.currentTime);
 
-    // 2. Set incoming playback rate IMMEDIATELY since it's inaudible at gain=0
-    incoming.el.playbackRate = this.incomingTargetRate;
-    if (incoming.st) {
-      incoming.st.setSpeed(this.incomingTargetRate);
-    }
-    this.incomingCurrentRate = this.incomingTargetRate;
-
-    // 3. Load and preload the incoming track before starting the fade
+    // 2. Load and preload the incoming track before starting the fade
     incoming.el.src = nextSrc;
     incoming.el.preload = 'auto';
 
@@ -203,6 +195,10 @@ export class AudioPlayer {
     });
 
     await incoming.el.play();
+
+    // 3. Set incoming playback rate AFTER play (setting src resets playbackRate to 1.0)
+    incoming.el.playbackRate = this.incomingTargetRate;
+    this.incomingCurrentRate = this.incomingTargetRate;
 
     // 4. Schedule crossfade curves AFTER play started
     // Use a 50ms offset to let the decoder settle (avoids initial click/pop)
@@ -270,6 +266,7 @@ export class AudioPlayer {
     // Restore outgoing deck to full volume
     outgoing.gain!.gain.cancelScheduledValues(0);
     outgoing.gain!.gain.setValueAtTime(1, now);
+    outgoing.el.playbackRate = this.targetRate;
 
     this.crossfading = false;
   }
@@ -334,23 +331,19 @@ export class AudioPlayer {
   setPlaybackRate(r: number) {
     this.targetRate = r;
     this.currentRate = r;
-    const deck = this.getActiveDeckObj();
-    deck.el.playbackRate = r;
-    // Tell Signalsmith Stretch the current speed so it compensates pitch
-    if (deck.st) {
-      deck.st.setSpeed(r);
-    }
+    this.getActiveDeckObj().el.playbackRate = r;
   }
 
   /** Set the incoming deck's playback rate (for BPM matching during crossfade). */
   setIncomingPlaybackRate(r: number) {
     this.incomingTargetRate = r;
     this.incomingCurrentRate = r;
-    const deck = this.getInactiveDeckObj();
-    deck.el.playbackRate = r;
-    if (deck.st) {
-      deck.st.setSpeed(r);
-    }
+    this.getInactiveDeckObj().el.playbackRate = r;
+  }
+
+  /** Set the outgoing (active) deck's playback rate during crossfade. */
+  setOutgoingPlaybackRate(r: number) {
+    this.getActiveDeckObj().el.playbackRate = r;
   }
 
   get paused() { return this.getActiveDeckObj().el.paused; }

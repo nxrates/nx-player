@@ -264,11 +264,12 @@ async function startAutoMix(crossfadeDur: number) {
     return;
   }
 
-  // BPM matching: adjust next track's speed to match current track's BPM
+  // BPM matching: adjust the OUTGOING track to match the incoming track's tempo.
+  // The incoming track plays at its natural BPM — the ending track adapts.
   if (cachedMatchBpm && currentTrack?.bpm && nextTrack.bpm) {
-    const ratio = currentTrack.bpm / nextTrack.bpm; // slow down if next is faster, speed up if slower
+    const ratio = nextTrack.bpm / currentTrack.bpm;
     if (ratio >= 0.85 && ratio <= 1.15) {
-      audioPlayer.setIncomingPlaybackRate(playbackRate * ratio);
+      audioPlayer.setOutgoingPlaybackRate(playbackRate * ratio);
     }
   }
 
@@ -288,6 +289,10 @@ async function startAutoMix(crossfadeDur: number) {
   outgoingDuration = duration;
   crossfadeProgress = 0;
 
+  // Set incoming deck to user's base playback rate BEFORE crossfade starts.
+  // The incoming track plays at its natural BPM × user rate — only outgoing adapts.
+  audioPlayer.setIncomingPlaybackRate(playbackRate);
+
   const nextSrc = streamUrl(nextTrack.path);
   try {
     await audioPlayer.startCrossfade(nextSrc, crossfadeDur * 1000, {
@@ -302,13 +307,9 @@ async function startAutoMix(crossfadeDur: number) {
     currentTrack = nextTrack;
     coverUrl = nextCoverUrl;
     position = 0;
-
-    // Reset playback rate on the now-active deck if we adjusted it
-    if (cachedMatchBpm) {
-      audioPlayer.setPlaybackRate(playbackRate);
-    }
   } catch (e) {
     console.error('Auto-mix crossfade failed:', e);
+    audioPlayer.setOutgoingPlaybackRate(playbackRate);
     isCrossfading = false;
     outgoingTrack = null;
     outgoingCoverUrl = null;
